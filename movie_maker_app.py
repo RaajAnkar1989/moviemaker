@@ -157,8 +157,9 @@ def main():
         st.header("🎞️ Cinematic")
         do_watermark = st.checkbox("Remove Watermarks (Smart Zoom)", value=True)
         transition_style = st.selectbox("Transition Style", ["Hard Cut", "Cross Dissolve", "Fade In/Out", "Whip Pan", "Zoom In/Out", "Glitch", "White Flash", "Random"], index=1)
-        res_options = [360, 480, 720, 1080]
-        res_h = st.select_slider("Resolution (Height)", options=res_options, value=720, help="Higher resolution takes more time but looks better.")
+        res_options = [360, 480, 720, 1080] if IS_LOCAL else [360, 480, 720]
+        default_res = 720 if IS_LOCAL else 480
+        res_h = st.select_slider("Resolution (Height)", options=res_options, value=default_res, help="480p is recommended for Cloud stability. 1080p is for Local use.")
         st.divider()
         st.header("🔊 Audio")
         video_vol = st.slider("Original Volume", 0.0, 2.0, 1.0)

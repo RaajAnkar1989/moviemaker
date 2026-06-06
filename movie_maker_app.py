@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import tempfile
 import random
+import time
 import moviepy.video.fx as vfx
 from moviepy import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, ColorClip, AudioClip, AudioFileClip, CompositeAudioClip, concatenate_audioclips
 import numpy as np
@@ -9,44 +10,65 @@ import numpy as np
 # Page config for mobile friendliness
 st.set_page_config(page_title="AI Movie Maker Pro", page_icon="🎬", layout="wide")
 
-# Custom CSS for better mobile appearance
+# Custom CSS for high-performance Dark Mode and UI speed
 st.markdown("""
     <style>
+    /* Dark Theme Overrides */
+    .stApp {
+        background-color: #0E1117;
+        color: #FAFAFA;
+    }
     .stButton>button {
         width: 100%;
-        border-radius: 5px;
-        height: 3em;
+        border-radius: 8px;
+        height: 3.5em;
         background-color: #FF4B4B;
         color: white;
+        font-weight: bold;
+        transition: transform 0.1s;
     }
-    .stTextArea textarea {
-        height: 100px;
+    .stButton>button:active {
+        transform: scale(0.98);
     }
     .video-row {
-        background-color: #f0f2f6;
-        padding: 10px;
-        border-radius: 5px;
-        margin-bottom: 5px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
+        background-color: #262730;
+        padding: 15px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        border: 1px solid #333;
     }
+    .stTextArea textarea {
+        background-color: #1A1C23;
+        color: white;
+        border-radius: 8px;
+    }
+    /* Fast Mobile Tweaks */
     @media (max-width: 640px) {
         .main .block-container {
-            padding: 1rem;
+            padding: 0.5rem;
+        }
+        .stButton>button {
+            height: 4em;
         }
     }
     </style>
     """, unsafe_allow_html=True)
+
+# Persistent storage for uploaded files to avoid re-loading slowness
+if 'temp_dir' not in st.session_state:
+    st.session_state.temp_dir = tempfile.mkdtemp()
+if 'video_sequence' not in st.session_state:
+    st.session_state.video_sequence = []
+if 'title_pages' not in st.session_state:
+    st.session_state.title_pages = [{"text": "THE CINEMATIC JOURNEY", "color": "White", "size": 70}]
+if 'end_pages' not in st.session_state:
+    st.session_state.end_pages = [{"text": "THE END", "color": "White", "size": 70}]
 
 def make_silence(duration, fps=44100):
     return AudioClip(lambda t: np.zeros((len(t) if isinstance(t, np.ndarray) else 1, 2)), duration=duration, fps=fps)
 
 def create_text_clip(text, duration=4, color_rgb=(0,0,0), font_size=70, text_color='white'):
     bg = ColorClip(size=(1280, 720), color=color_rgb).with_duration(duration)
-    
-    # FONT FIX: We omit the 'font' parameter or set it to None. 
-    # This allows MoviePy/Pillow to use the system's default font, avoiding the "Arial" error on Linux/Streamlit Cloud.
     try:
         txt = TextClip(
             text=text,
@@ -56,7 +78,6 @@ def create_text_clip(text, duration=4, color_rgb=(0,0,0), font_size=70, text_col
             method='caption'
         ).with_duration(duration).with_position('center')
     except Exception:
-        # Fallback if there's still a font issue
         txt = TextClip(
             text=text,
             font_size=font_size,
@@ -95,17 +116,7 @@ def apply_advanced_transition(clip, style):
 
 def main():
     st.title("🎬 AI Movie Maker Pro")
-    st.markdown("Professional Cinematic Video Generation — Optimized for Performance!")
-
-    # State for Title and End pages
-    if 'title_pages' not in st.session_state:
-        st.session_state.title_pages = [{"text": "THE CINEMATIC JOURNEY", "color": "White", "size": 70}]
-    if 'end_pages' not in st.session_state:
-        st.session_state.end_pages = [{"text": "THE END", "color": "White", "size": 70}]
-    
-    # State for video sequence management
-    if 'video_sequence' not in st.session_state:
-        st.session_state.video_sequence = []
+    st.markdown("Professional Cinematic Studio — Optimized for iPhone & High-Res Clips")
 
     # Sidebar for Pro Settings
     with st.sidebar:
@@ -140,52 +151,61 @@ def main():
     with tab1:
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader("Upload Videos")
-            uploaded_videos = st.file_uploader("Select MP4 clips (Up to 500MB)", type=["mp4"], accept_multiple_files=True)
+            st.subheader("Upload Media")
+            # Added .mov support for iPhone users
+            uploaded_videos = st.file_uploader("Select Video clips (MP4, MOV)", type=["mp4", "mov"], accept_multiple_files=True)
+            
             if uploaded_videos:
-                # Add new uploads to sequence if they aren't there
-                current_names = [v.name for v in st.session_state.video_sequence]
                 for f in uploaded_videos:
-                    if f.name not in current_names:
-                        st.session_state.video_sequence.append(f)
+                    # Save to persistent temp dir if not already there
+                    t_path = os.path.join(st.session_state.temp_dir, f.name)
+                    if not os.path.exists(t_path):
+                        with open(t_path, "wb") as tmp:
+                            tmp.write(f.getbuffer())
+                        # Add to sequence only once
+                        st.session_state.video_sequence.append({"name": f.name, "path": t_path})
+        
         with col2:
             st.subheader("Background Music")
-            uploaded_audio = st.file_uploader("Select MP3/WAV", type=["mp3", "wav", "m4a"])
+            uploaded_audio = st.file_uploader("Select MP3/WAV/M4A", type=["mp3", "wav", "m4a"])
 
         if st.session_state.video_sequence:
-            st.subheader("Arrange Video Sequence (Drag-and-Drop Style)")
-            st.info("Use the buttons to move clips up or down. Top clip plays first.")
+            st.divider()
+            st.subheader("Arrange Video Sequence")
+            st.caption("Top clip plays first. Move clips using the arrows.")
             
-            for i, f in enumerate(st.session_state.video_sequence):
-                col_name, col_up, col_down, col_rm = st.columns([6, 1, 1, 1])
-                col_name.write(f"**{i+1}.** {f.name}")
-                
-                if col_up.button("▲", key=f"up_{i}"):
-                    if i > 0:
-                        st.session_state.video_sequence[i], st.session_state.video_sequence[i-1] = \
-                            st.session_state.video_sequence[i-1], st.session_state.video_sequence[i]
+            # Using a loop with session state to keep UI snappy
+            for i, video in enumerate(st.session_state.video_sequence):
+                with st.container():
+                    c_name, c_up, c_down, c_rm = st.columns([6, 1, 1, 1])
+                    c_name.markdown(f"**{i+1}.** `{video['name']}`")
+                    
+                    if c_up.button("▲", key=f"up_{i}_{video['name']}"):
+                        if i > 0:
+                            st.session_state.video_sequence[i], st.session_state.video_sequence[i-1] = \
+                                st.session_state.video_sequence[i-1], st.session_state.video_sequence[i]
+                            st.rerun()
+                    
+                    if c_down.button("▼", key=f"down_{i}_{video['name']}"):
+                        if i < len(st.session_state.video_sequence) - 1:
+                            st.session_state.video_sequence[i], st.session_state.video_sequence[i+1] = \
+                                st.session_state.video_sequence[i+1], st.session_state.video_sequence[i]
+                            st.rerun()
+                    
+                    if c_rm.button("✕", key=f"rm_{i}_{video['name']}"):
+                        st.session_state.video_sequence.pop(i)
                         st.rerun()
-                
-                if col_down.button("▼", key=f"down_{i}"):
-                    if i < len(st.session_state.video_sequence) - 1:
-                        st.session_state.video_sequence[i], st.session_state.video_sequence[i+1] = \
-                            st.session_state.video_sequence[i+1], st.session_state.video_sequence[i]
-                        st.rerun()
-                
-                if col_rm.button("✕", key=f"rm_v_{i}"):
-                    st.session_state.video_sequence.pop(i)
-                    st.rerun()
             
             if st.button("🗑️ Clear Sequence"):
                 st.session_state.video_sequence = []
                 st.rerun()
         else:
-            st.info("Upload videos to arrange sequence.")
+            st.info("Upload videos from your library or camera to begin.")
 
     with tab2:
         st.subheader("Title Cards")
         for i, page in enumerate(st.session_state.title_pages):
-            with st.expander(f"Title Page {i+1}", expanded=True):
+            with st.expander(f"Title Page {i+1}", expanded=(i==0)):
                 st.session_state.title_pages[i]["text"] = st.text_area(f"Text for Page {i+1}", value=page["text"], key=f"t_text_{i}")
                 c1, c2 = st.columns(2)
                 st.session_state.title_pages[i]["size"] = c1.number_input("Size", 10, 200, page["size"], key=f"t_size_{i}")
@@ -200,7 +220,7 @@ def main():
         st.divider()
         st.subheader("End Credits")
         for i, page in enumerate(st.session_state.end_pages):
-            with st.expander(f"Credit Page {i+1}", expanded=True):
+            with st.expander(f"Credit Page {i+1}", expanded=(i==0)):
                 st.session_state.end_pages[i]["text"] = st.text_area(f"Text for Page {i+1}", value=page["text"], key=f"e_text_{i}")
                 c1, c2 = st.columns(2)
                 st.session_state.end_pages[i]["size"] = c1.number_input("Size", 10, 200, page["size"], key=f"e_size_{i}")
@@ -213,33 +233,27 @@ def main():
             st.rerun()
 
     with tab3:
-        if st.button("🚀 GENERATE FULL CINEMATIC MOVIE"):
+        if st.button("🚀 GENERATE CINEMATIC MOVIE (HIGH SPEED)"):
             if not st.session_state.video_sequence:
                 st.error("Please upload videos first!")
             else:
                 try:
-                    with st.status("🎬 Processing movie...", expanded=True) as status:
-                        temp_dir = tempfile.mkdtemp()
+                    with st.status("🎬 Production in progress...", expanded=True) as status:
                         clips = []
                         
-                        # Use the manually arranged sequence from session state
-                        sorted_uploads = st.session_state.video_sequence
-
                         # 1. Titles
-                        status.update(label="Creating title cards...")
+                        status.update(label="Creating cinematic titles...")
                         for page in st.session_state.title_pages:
                             if page["text"].strip():
                                 c = create_text_clip(page["text"], 4, bg_colors[color_choice], page["size"], page["color"])
                                 clips.append(apply_advanced_transition(c, transition_style))
 
-                        # 2. Clips
-                        for idx, f in enumerate(sorted_uploads):
-                            status.update(label=f"Processing {f.name}...")
-                            t_path = os.path.join(temp_dir, f.name)
-                            with open(t_path, "wb") as tmp:
-                                tmp.write(f.getbuffer())
+                        # 2. Clips (Optimized for large files)
+                        for idx, video in enumerate(st.session_state.video_sequence):
+                            status.update(label=f"Processing {video['name']} (High-Res Load)...")
+                            # We load each clip once and apply effects
+                            clip = VideoFileClip(video['path'])
                             
-                            clip = VideoFileClip(t_path)
                             if do_watermark:
                                 w, h = clip.size
                                 clip = clip.with_effects([
@@ -255,21 +269,21 @@ def main():
                             clips.append(clip)
 
                         # 3. Credits
-                        status.update(label="Creating credit pages...")
+                        status.update(label="Adding end credits...")
                         for page in st.session_state.end_pages:
                             if page["text"].strip():
                                 c = create_text_clip(page["text"], 4, bg_colors[color_choice], page["size"], page["color"])
                                 clips.append(apply_advanced_transition(c, transition_style))
 
                         # 4. Concatenate
-                        status.update(label="Stitching everything together...")
+                        status.update(label="Stitching final sequence...")
                         padding = -1 if transition_style in ["Cross Dissolve", "Whip Pan", "Zoom In/Out", "Random"] else 0
                         final_video = concatenate_videoclips(clips, method="compose", padding=padding)
 
                         # 5. Audio
                         if uploaded_audio:
-                            status.update(label="Mixing background music...")
-                            a_path = os.path.join(temp_dir, uploaded_audio.name)
+                            status.update(label="Mastering background audio...")
+                            a_path = os.path.join(st.session_state.temp_dir, uploaded_audio.name)
                             with open(a_path, "wb") as tmp:
                                 tmp.write(uploaded_audio.getbuffer())
                             bg_audio = AudioFileClip(a_path)
@@ -279,27 +293,27 @@ def main():
                             bg_audio = bg_audio.subclipped(0, final_video.duration)
                             final_video = final_video.with_audio(CompositeAudioClip([final_video.audio, bg_audio.with_volume_scaled(bg_vol)]))
 
-                        # 6. Render - SPEED OPTIMIZED
-                        out_path = os.path.join(temp_dir, "final_movie.mp4")
-                        status.update(label="Rendering (High-Speed Optimized)...")
+                        # 6. Render - MAXIMUM SPEED
+                        out_path = os.path.join(st.session_state.temp_dir, f"movie_{int(time.time())}.mp4")
+                        status.update(label="Exporting High-Res MP4 (Optimized)...")
                         
-                        # Performance settings: ultrafast preset and multiple threads
+                        # Use 'ultrafast' and multi-threading for the best industry speed
                         final_video.write_videofile(
                             out_path, 
                             fps=24, 
                             codec="libx264", 
                             audio_codec="aac",
                             preset="ultrafast",
-                            threads=4
+                            threads=8 # Increased threads for 300MB+ files
                         )
-                        status.update(label="✅ Movie Complete!", state="complete")
+                        status.update(label="✅ Cinematic Movie Ready!", state="complete")
 
                     st.balloons()
                     with open(out_path, "rb") as file:
-                        st.download_button("⬇️ DOWNLOAD MOVIE", data=file, file_name="movie_pro.mp4", mime="video/mp4")
+                        st.download_button("⬇️ DOWNLOAD MOVIE", data=file, file_name="ai_movie_pro.mp4", mime="video/mp4")
                         
                 except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    st.error(f"Error during production: {str(e)}")
 
 if __name__ == "__main__":
     main()

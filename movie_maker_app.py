@@ -24,20 +24,26 @@ def get_local_ip():
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except: return "localhost"
+    except: return "127.0.0.1"
 
-IS_LOCAL = not os.getenv("STREAMLIT_CLOUD_APP_ID")
+# Robust Cloud Detection
+IS_LOCAL = not os.getenv("STREAMLIT_CLOUD_APP_ID") and not os.getenv("DYNO")
 LOCAL_IP = get_local_ip()
 
 # Page Setup
 st.set_page_config(page_title="AI Movie Maker Pro", page_icon="🎬", layout="wide")
 
-# UI Styling (Hides Platform UI)
+# UI Styling (Hides Platform UI but keeps Sidebar Toggle)
 st.markdown("""
     <style>
-    header {visibility: hidden;}
+    /* Keep the header but hide specific buttons if needed */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
+    .stDeployButton {display:none;}
+    
+    /* Ensure sidebar toggle is visible and clickable */
+    [data-testid="stSidebarNav"] {display: none;}
+    
     .stApp { background-color: #0E1117; color: #FAFAFA; }
     .stButton>button { width: 100%; border-radius: 8px; background-color: #FF4B4B; color: white; font-weight: bold; }
     .stButton>button:hover { background-color: #FF3333; border-color: white; }
@@ -60,6 +66,7 @@ def init_state():
         st.session_state.app_id = str(int(time.time()))
         st.session_state.temp_dir = tempfile.mkdtemp(prefix=f"mpy_{st.session_state.app_id}_")
     if 'video_sequence' not in st.session_state: st.session_state.video_sequence = []
+    if 'processed_uploads' not in st.session_state: st.session_state.processed_uploads = set()
     if 'title_pages' not in st.session_state: st.session_state.title_pages = [{"text": "THE CINEMATIC JOURNEY", "color": "White", "size": 50}]
     if 'end_pages' not in st.session_state: st.session_state.end_pages = [{"text": "THE END", "color": "White", "size": 50}]
     if 'gen_error' not in st.session_state: st.session_state.gen_error = None
@@ -136,6 +143,7 @@ def main():
 
     with st.sidebar:
         if IS_LOCAL:
+            st.success("💻 **Running Locally** (Full Power)")
             st.markdown("### 📱 Mobile App Link")
             mobile_url = f"http://{LOCAL_IP}:8501"
             qr = qrcode.QRCode(version=1, box_size=10, border=5)
@@ -149,6 +157,10 @@ def main():
             st.code(mobile_url)
             st.info("💡 **Pro Tip:** Scan this and 'Add to Home Screen' on your phone to use it like a real app!")
             st.divider()
+        else:
+            st.warning("☁️ **Running on Cloud** (Safe Mode Active)")
+            st.info("💡 **Note**: For 1080p and faster rendering, run this app locally on your Mac.")
+            st.divider()
 
         st.header("🎨 Card Style")
         bg_colors = {"Black": (0, 0, 0), "Dark Blue": (0, 0, 50), "Dark Red": (50, 0, 0), "Deep Purple": (48, 25, 52), "White": (255, 255, 255)}
@@ -160,6 +172,12 @@ def main():
         res_options = [360, 480, 720, 1080] if IS_LOCAL else [360, 480, 720]
         default_res = 720 if IS_LOCAL else 480
         res_h = st.select_slider("Resolution (Height)", options=res_options, value=default_res, help="480p is recommended for Cloud stability. 1080p is for Local use.")
+        
+        st.header("💎 Quality & Size")
+        quality_map = {"Small (Low Bitrate)": "1500k", "Standard (Medium)": "3000k", "Cinematic (High)": "6000k", "Pro (Ultra)": "12000k"}
+        quality_choice = st.select_slider("Export Quality", options=list(quality_map.keys()), value="Standard (Medium)")
+        target_bitrate = quality_map[quality_choice]
+        
         st.divider()
         st.header("🔊 Audio")
         video_vol = st.slider("Original Volume", 0.0, 2.0, 1.0)
@@ -173,13 +191,24 @@ def main():
     with tab1:
         st.markdown(f"<div class='upload-stats'>Storage Used: {total_size_mb:.1f}MB / {MAX_UPLOAD_MB}MB</div>", unsafe_allow_html=True)
         uploaded_videos = st.file_uploader("Upload Clips (MP4/MOV)", type=["mp4", "mov"], accept_multiple_files=True)
+        
+        # Stability fix: Only process new uploads to prevent flickering/infinite reruns
         if uploaded_videos:
+            new_files_added = False
             for f in uploaded_videos:
-                t_path = os.path.join(st.session_state.temp_dir, f.name)
-                if not os.path.exists(t_path):
+                # Create a unique ID for the file based on name and size
+                file_id = f"{f.name}_{f.size}"
+                if file_id not in st.session_state.processed_uploads:
+                    t_path = os.path.join(st.session_state.temp_dir, f.name)
                     with open(t_path, "wb") as tmp: tmp.write(f.getbuffer())
                     st.session_state.video_sequence.append({"name": f.name, "path": t_path, "size": f.size})
-            st.rerun()
+                    st.session_state.processed_uploads.add(file_id)
+                    new_files_added = True
+            if new_files_added:
+                st.rerun()
+        elif len(st.session_state.processed_uploads) > 0 and not uploaded_videos:
+            # If the user cleared the uploader, clear our tracking set too
+            st.session_state.processed_uploads = set()
         
         uploaded_audio = st.file_uploader("Background Music (Optional)", type=["mp3", "wav", "m4a"])
 
@@ -199,6 +228,7 @@ def main():
                     st.rerun()
 
     with tab2:
+        st.subheader("📝 Title Cards")
         for i, page in enumerate(st.session_state.title_pages):
             with st.expander(f"Title Card {i+1}", expanded=(i==0)):
                 st.session_state.title_pages[i]["text"] = st.text_area("Text", page["text"], key=f"tt_{i}")
@@ -206,6 +236,16 @@ def main():
                 st.session_state.title_pages[i]["size"] = c1.number_input("Size", 10, 150, page["size"], key=f"ts_{i}")
                 st.session_state.title_pages[i]["color"] = c2.selectbox("Color", ["White", "Yellow", "Cyan", "Red"], index=0, key=f"tc_{i}")
         if st.button("+ Add Title Card"): st.session_state.title_pages.append({"text": "", "color": "White", "size": 50}); st.rerun()
+        
+        st.divider()
+        st.subheader("🎬 End Credits")
+        for i, page in enumerate(st.session_state.end_pages):
+            with st.expander(f"End Card {i+1}", expanded=(i==0)):
+                st.session_state.end_pages[i]["text"] = st.text_area("Text", page["text"], key=f"et_{i}")
+                c1, c2 = st.columns(2)
+                st.session_state.end_pages[i]["size"] = c1.number_input("Size", 10, 150, page["size"], key=f"es_{i}")
+                st.session_state.end_pages[i]["color"] = c2.selectbox("Color", ["White", "Yellow", "Cyan", "Red"], index=0, key=f"ec_{i}")
+        if st.button("+ Add End Card"): st.session_state.end_pages.append({"text": "", "color": "White", "size": 50}); st.rerun()
 
     with tab3:
         if st.button("🎬 GENERATE CINEMATIC MOVIE"):
@@ -276,7 +316,7 @@ def main():
                             clip = clip.with_effects([vfx.Crop(x1=int(w*0.1), y1=int(h*0.1), width=int(w*0.8), height=int(h*0.8)), vfx.Resize(height=res_h)])
                         clip = apply_transition(clip, transition_style)
                         clip = clip.with_audio(clip.audio.with_volume_scaled(video_vol) if clip.audio else make_silence(clip.duration))
-                        clip.write_videofile(p, fps=24, codec="libx264", audio_codec="aac", logger=None, preset="ultrafast", bitrate="1500k")
+                        clip.write_videofile(p, fps=24, codec="libx264", audio_codec="aac", logger=None, preset="ultrafast", bitrate=target_bitrate)
                         clip.close(); gc.collect()
                         st.session_state.processed_clips[cache_key] = p
                     processed_paths.append(p)
@@ -323,7 +363,7 @@ def main():
                 # 6. Final Render
                 out = os.path.join(st.session_state.temp_dir, f"final_{int(time.time())}.mp4")
                 # Use threads=1 for maximum stability on shared cloud CPUs
-                final_video.write_videofile(out, fps=24, codec="libx264", audio_codec="aac", preset="ultrafast", threads=1)
+                final_video.write_videofile(out, fps=24, codec="libx264", audio_codec="aac", preset="ultrafast", threads=1, bitrate=target_bitrate)
                 final_video.close(); [c.close() for c in final_clips]; gc.collect()
                 
                 gen_status.markdown("<div class='success-box'>✅ Movie Ready! You can download it below.</div>", unsafe_allow_html=True)

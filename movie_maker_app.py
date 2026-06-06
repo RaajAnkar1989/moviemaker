@@ -22,6 +22,15 @@ st.markdown("""
     .stTextArea textarea {
         height: 100px;
     }
+    .video-row {
+        background-color: #f0f2f6;
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 5px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
     @media (max-width: 640px) {
         .main .block-container {
             padding: 1rem;
@@ -86,13 +95,17 @@ def apply_advanced_transition(clip, style):
 
 def main():
     st.title("🎬 AI Movie Maker Pro")
-    st.markdown("Professional Cinematic Video Generation — Mobile & Cloud Optimized!")
+    st.markdown("Professional Cinematic Video Generation — Optimized for Performance!")
 
     # State for Title and End pages
     if 'title_pages' not in st.session_state:
         st.session_state.title_pages = [{"text": "THE CINEMATIC JOURNEY", "color": "White", "size": 70}]
     if 'end_pages' not in st.session_state:
         st.session_state.end_pages = [{"text": "THE END", "color": "White", "size": 70}]
+    
+    # State for video sequence management
+    if 'video_sequence' not in st.session_state:
+        st.session_state.video_sequence = []
 
     # Sidebar for Pro Settings
     with st.sidebar:
@@ -128,15 +141,44 @@ def main():
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("Upload Videos")
-            uploaded_videos = st.file_uploader("Select MP4 clips", type=["mp4"], accept_multiple_files=True)
+            uploaded_videos = st.file_uploader("Select MP4 clips (Up to 500MB)", type=["mp4"], accept_multiple_files=True)
+            if uploaded_videos:
+                # Add new uploads to sequence if they aren't there
+                current_names = [v.name for v in st.session_state.video_sequence]
+                for f in uploaded_videos:
+                    if f.name not in current_names:
+                        st.session_state.video_sequence.append(f)
         with col2:
             st.subheader("Background Music")
             uploaded_audio = st.file_uploader("Select MP3/WAV", type=["mp3", "wav", "m4a"])
 
-        if uploaded_videos:
-            st.subheader("Arrange Video Sequence")
-            file_names = [f.name for f in uploaded_videos]
-            order = st.multiselect("Drag and drop to reorder:", options=file_names, default=file_names)
+        if st.session_state.video_sequence:
+            st.subheader("Arrange Video Sequence (Drag-and-Drop Style)")
+            st.info("Use the buttons to move clips up or down. Top clip plays first.")
+            
+            for i, f in enumerate(st.session_state.video_sequence):
+                col_name, col_up, col_down, col_rm = st.columns([6, 1, 1, 1])
+                col_name.write(f"**{i+1}.** {f.name}")
+                
+                if col_up.button("▲", key=f"up_{i}"):
+                    if i > 0:
+                        st.session_state.video_sequence[i], st.session_state.video_sequence[i-1] = \
+                            st.session_state.video_sequence[i-1], st.session_state.video_sequence[i]
+                        st.rerun()
+                
+                if col_down.button("▼", key=f"down_{i}"):
+                    if i < len(st.session_state.video_sequence) - 1:
+                        st.session_state.video_sequence[i], st.session_state.video_sequence[i+1] = \
+                            st.session_state.video_sequence[i+1], st.session_state.video_sequence[i]
+                        st.rerun()
+                
+                if col_rm.button("✕", key=f"rm_v_{i}"):
+                    st.session_state.video_sequence.pop(i)
+                    st.rerun()
+            
+            if st.button("🗑️ Clear Sequence"):
+                st.session_state.video_sequence = []
+                st.rerun()
         else:
             st.info("Upload videos to arrange sequence.")
 
@@ -172,23 +214,16 @@ def main():
 
     with tab3:
         if st.button("🚀 GENERATE FULL CINEMATIC MOVIE"):
-            if not uploaded_videos:
+            if not st.session_state.video_sequence:
                 st.error("Please upload videos first!")
-            elif len(order) != len(uploaded_videos):
-                st.error("Please include all videos in the sequence list.")
             else:
                 try:
                     with st.status("🎬 Processing movie...", expanded=True) as status:
                         temp_dir = tempfile.mkdtemp()
                         clips = []
                         
-                        # Sort uploads
-                        sorted_uploads = []
-                        for name in order:
-                            for f in uploaded_videos:
-                                if f.name == name:
-                                    sorted_uploads.append(f)
-                                    break
+                        # Use the manually arranged sequence from session state
+                        sorted_uploads = st.session_state.video_sequence
 
                         # 1. Titles
                         status.update(label="Creating title cards...")
@@ -244,10 +279,19 @@ def main():
                             bg_audio = bg_audio.subclipped(0, final_video.duration)
                             final_video = final_video.with_audio(CompositeAudioClip([final_video.audio, bg_audio.with_volume_scaled(bg_vol)]))
 
-                        # 6. Render
+                        # 6. Render - SPEED OPTIMIZED
                         out_path = os.path.join(temp_dir, "final_movie.mp4")
-                        status.update(label="Rendering (Final Step)...")
-                        final_video.write_videofile(out_path, fps=24, codec="libx264", audio_codec="aac")
+                        status.update(label="Rendering (High-Speed Optimized)...")
+                        
+                        # Performance settings: ultrafast preset and multiple threads
+                        final_video.write_videofile(
+                            out_path, 
+                            fps=24, 
+                            codec="libx264", 
+                            audio_codec="aac",
+                            preset="ultrafast",
+                            threads=4
+                        )
                         status.update(label="✅ Movie Complete!", state="complete")
 
                     st.balloons()

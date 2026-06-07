@@ -4,7 +4,7 @@ import random
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
-from moviepy import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, ColorClip, AudioClip, AudioFileClip, CompositeAudioClip, concatenate_audioclips
+from moviepy import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, ColorClip, AudioClip, AudioFileClip, CompositeAudioClip, concatenate_audioclips, ImageClip
 import moviepy.video.fx as vfx
 import numpy as np
 
@@ -17,13 +17,11 @@ class MovieMakerApp(ctk.CTk):
         super().__init__()
 
         self.title("AI Movie Maker Pro")
-        
-        # Start maximized or full screen
         self.after(0, lambda: self.state('zoomed'))
         self.geometry("1100x850")
 
         # Variables
-        self.selected_files = []
+        self.selected_files = [] # List of dicts: {"path": p, "is_image": bool, "duration": float, "filter": str}
         self.background_audio_path = None
         self.processing = False
         self.title_pages = [{"text": "THE CINEMATIC JOURNEY", "color": "White", "size": 70}]
@@ -70,6 +68,12 @@ class MovieMakerApp(ctk.CTk):
         self.color_menu = ctk.CTkComboBox(self.left_panel, values=list(self.bg_colors.keys()), variable=self.color_var)
         self.color_menu.pack(padx=10, pady=5, fill="x")
 
+        # Aspect Ratio
+        ctk.CTkLabel(self.left_panel, text="Aspect Ratio:").pack(padx=10, pady=(15, 0), anchor="w")
+        self.aspect_var = ctk.StringVar(value="16:9 (Widescreen)")
+        self.aspect_menu = ctk.CTkComboBox(self.left_panel, values=["16:9 (Widescreen)", "9:16 (Vertical)", "1:1 (Square)", "4:3 (Standard)"], variable=self.aspect_var)
+        self.aspect_menu.pack(padx=10, pady=5, fill="x")
+
         # Audio Section
         ctk.CTkLabel(self.left_panel, text="Background Music:", font=ctk.CTkFont(weight="bold")).pack(padx=10, pady=(20, 0), anchor="w")
         self.audio_label = ctk.CTkLabel(self.left_panel, text="No audio selected", font=ctk.CTkFont(size=11), wraplength=300)
@@ -105,13 +109,13 @@ class MovieMakerApp(ctk.CTk):
         self.right_panel.grid_columnconfigure(0, weight=1)
         self.right_panel.grid_rowconfigure(1, weight=1)
 
-        ctk.CTkLabel(self.right_panel, text="Video Sequence", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, pady=10)
+        ctk.CTkLabel(self.right_panel, text="Media Sequence", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, pady=10)
         self.scroll_frame = ctk.CTkScrollableFrame(self.right_panel)
         self.scroll_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
 
         self.list_controls = ctk.CTkFrame(self.right_panel, fg_color="transparent")
         self.list_controls.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
-        ctk.CTkButton(self.list_controls, text="➕ Add Videos", command=self.add_files).pack(side="left", padx=5)
+        ctk.CTkButton(self.list_controls, text="➕ Add Media", command=self.add_files).pack(side="left", padx=5)
         ctk.CTkButton(self.list_controls, text="🗑️ Clear All", command=self.clear_files, fg_color="#d32f2f").pack(side="right", padx=5)
 
         # Progress
@@ -193,24 +197,54 @@ class MovieMakerApp(ctk.CTk):
         if file: self.background_audio_path = file; self.audio_label.configure(text=os.path.basename(file))
 
     def add_files(self):
-        files = filedialog.askopenfilenames(filetypes=[("MP4", "*.mp4")])
+        files = filedialog.askopenfilenames(filetypes=[("Media Files", "*.mp4 *.mov *.png *.jpg *.jpeg")])
         if files:
             for f in files: 
-                if f not in self.selected_files: self.selected_files.append(f)
+                if not any(item["path"] == f for item in self.selected_files):
+                    is_img = f.lower().endswith(('.png', '.jpg', '.jpeg'))
+                    self.selected_files.append({"path": f, "is_image": is_img, "duration": 5, "filter": "None"})
             self.refresh_video_list(); self.generate_button.configure(state="normal")
 
     def clear_files(self): self.selected_files = []; self.refresh_video_list(); self.generate_button.configure(state="disabled")
 
     def refresh_video_list(self):
         for widget in self.scroll_frame.winfo_children(): widget.destroy()
-        for i, f in enumerate(self.selected_files):
+        for i, item in enumerate(self.selected_files):
+            f = item["path"]
+            is_img = item.get("is_image", False)
             row = ctk.CTkFrame(self.scroll_frame)
             row.pack(fill="x", pady=2, padx=5)
-            ctk.CTkLabel(row, text=f"{i+1}.", width=30).pack(side="left", padx=5)
-            ctk.CTkLabel(row, text=os.path.basename(f), anchor="w").pack(side="left", padx=5, fill="x", expand=True)
-            ctk.CTkButton(row, text="▲", width=30, command=lambda idx=i: self.move_file(idx, -1)).pack(side="left", padx=2)
-            ctk.CTkButton(row, text="▼", width=30, command=lambda idx=i: self.move_file(idx, 1)).pack(side="left", padx=2)
-            ctk.CTkButton(row, text="✕", width=30, command=lambda idx=i: self.remove_file(idx), fg_color="#d32f2f").pack(side="left", padx=2)
+            
+            top_row = ctk.CTkFrame(row, fg_color="transparent")
+            top_row.pack(fill="x", padx=5, pady=(5,0))
+            
+            ctk.CTkLabel(top_row, text=f"{i+1}.", width=30).pack(side="left", padx=5)
+            ctk.CTkLabel(top_row, text=os.path.basename(f), anchor="w").pack(side="left", padx=5, fill="x", expand=True)
+            ctk.CTkButton(top_row, text="▲", width=30, command=lambda idx=i: self.move_file(idx, -1)).pack(side="left", padx=2)
+            ctk.CTkButton(top_row, text="▼", width=30, command=lambda idx=i: self.move_file(idx, 1)).pack(side="left", padx=2)
+            ctk.CTkButton(top_row, text="✕", width=30, command=lambda idx=i: self.remove_file(idx), fg_color="#d32f2f").pack(side="left", padx=2)
+            
+            bot_row = ctk.CTkFrame(row, fg_color="transparent")
+            bot_row.pack(fill="x", padx=5, pady=(0,5))
+            
+            if is_img:
+                ctk.CTkLabel(bot_row, text="Duration(s):", font=ctk.CTkFont(size=11)).pack(side="left", padx=5)
+                dur_entry = ctk.CTkEntry(bot_row, width=40, height=20, font=ctk.CTkFont(size=11))
+                dur_entry.insert(0, str(item["duration"]))
+                dur_entry.pack(side="left", padx=5)
+                dur_entry.bind("<FocusOut>", lambda e, idx=i: self.update_file_opt(idx, "duration", e.widget.get()))
+            
+            ctk.CTkLabel(bot_row, text="Filter:", font=ctk.CTkFont(size=11)).pack(side="left", padx=5)
+            filter_menu = ctk.CTkComboBox(bot_row, values=["None", "B&W", "Sepia", "Vibrant", "Dim"], width=80, height=20, font=ctk.CTkFont(size=11))
+            filter_menu.set(item["filter"])
+            filter_menu.pack(side="left", padx=5)
+            filter_menu.configure(command=lambda val, idx=i: self.update_file_opt(idx, "filter", val))
+
+    def update_file_opt(self, idx, key, val):
+        if key == "duration":
+            try: self.selected_files[idx][key] = float(val)
+            except: pass
+        else: self.selected_files[idx][key] = val
 
     def move_file(self, idx, dir):
         new_idx = idx + dir
@@ -227,9 +261,34 @@ class MovieMakerApp(ctk.CTk):
 
     def create_text_clip(self, text, duration=4, font_size=70, text_color='white'):
         rgb = self.bg_colors.get(self.color_var.get(), (0, 0, 0))
-        bg = ColorClip(size=(1280, 720), color=rgb).with_duration(duration)
-        txt = TextClip(text=text, font_size=font_size, color=text_color.lower(), font='Arial', size=(1280, 720), method='caption').with_duration(duration).with_position('center')
+        target_ratio_str = self.aspect_var.get()
+        ratio_map = {"16:9 (Widescreen)": 16/9, "9:16 (Vertical)": 9/16, "1:1 (Square)": 1.0, "4:3 (Standard)": 4/3}
+        target_ratio = ratio_map.get(target_ratio_str, 16/9)
+        res_h = 720
+        target_size = (int(res_h * target_ratio), res_h)
+
+        bg = ColorClip(size=target_size, color=rgb).with_duration(duration)
+        try:
+            txt = TextClip(text=text, font_size=font_size, color=text_color.lower(), size=target_size, method='caption').with_duration(duration).with_position('center')
+        except:
+            txt = TextClip(text=text, font_size=font_size, color='white', size=target_size, method='caption').with_duration(duration).with_position('center')
+            
         return CompositeVideoClip([bg, txt]).with_audio(self.make_silence(duration))
+
+    def apply_color_filter(self, clip, filter_name):
+        if filter_name == "None": return clip
+        if filter_name == "B&W": return clip.with_effects([vfx.BlackAndWhite()])
+        if filter_name == "Sepia":
+            def sepia(t):
+                frame = clip.get_frame(t)
+                sepia_filter = np.array([[0.393, 0.769, 0.189],
+                                       [0.349, 0.686, 0.168],
+                                       [0.272, 0.534, 0.131]])
+                return np.clip(frame @ sepia_filter.T, 0, 255).astype(np.uint8)
+            return clip.with_updated_frame_function(sepia)
+        if filter_name == "Vibrant": return clip.with_effects([vfx.MultiplyColor(1.5)])
+        if filter_name == "Dim": return clip.with_effects([vfx.MultiplyColor(0.7)])
+        return clip
 
     def start_processing(self):
         self.processing = True; self.generate_button.configure(state="disabled")
@@ -264,7 +323,14 @@ class MovieMakerApp(ctk.CTk):
         try:
             out = filedialog.asksaveasfilename(defaultextension=".mp4", initialfile="movie_pro.mp4")
             if not out: return self.reset_ui()
+            
             v_vol = self.video_volume_slider.get(); trans = self.transition_var.get(); do_zoom = self.watermark_var.get()
+            
+            target_ratio_str = self.aspect_var.get()
+            ratio_map = {"16:9 (Widescreen)": 16/9, "9:16 (Vertical)": 9/16, "1:1 (Square)": 1.0, "4:3 (Standard)": 4/3}
+            target_ratio = ratio_map.get(target_ratio_str, 16/9)
+            res_h = 720
+            
             clips = []
             for page in self.title_pages:
                 text = page["text"].strip()
@@ -272,30 +338,66 @@ class MovieMakerApp(ctk.CTk):
                     c = self.create_text_clip(text, font_size=page["size"], text_color=page["color"])
                     if trans != "Hard Cut": c = self.apply_advanced_transition(c, trans)
                     clips.append(c)
-            for i, f in enumerate(self.selected_files):
+                    
+            for i, item in enumerate(self.selected_files):
+                f = item["path"]
+                is_img = item.get("is_image", False)
+                dur = item.get("duration", 5)
+                fltr = item.get("filter", "None")
+                
                 self.update_status(f"Processing clip {i+1}...", 0.1 + (i/len(self.selected_files))*0.6)
-                c = VideoFileClip(f)
-                if do_zoom:
+                
+                if is_img:
+                    c = ImageClip(f).with_duration(dur)
+                    c = c.with_effects([vfx.Resize(lambda t: 1 + 0.1 * (t / c.duration))])
+                else:
+                    c = VideoFileClip(f)
+
+                w, h = c.size
+                clip_ratio = w / h
+                if abs(clip_ratio - target_ratio) > 0.05:
+                    if clip_ratio > target_ratio:
+                        new_w = int(h * target_ratio)
+                        c = c.with_effects([vfx.Crop(x_center=w/2, y_center=h/2, width=new_w, height=h)])
+                    else:
+                        new_h = int(w / target_ratio)
+                        c = c.with_effects([vfx.Crop(x_center=w/2, y_center=h/2, width=w, height=new_h)])
+
+                if c.h != res_h: 
+                    c = c.with_effects([vfx.Resize(height=res_h)])
+                
+                if not is_img and do_zoom:
                     w, h = c.size
-                    c = c.with_effects([vfx.Crop(x1=int(w*0.1), y1=int(h*0.1), width=int(w*0.8), height=int(h*0.8)), vfx.Resize(width=w, height=h)])
-                c = c.with_audio(c.audio.with_volume_scaled(v_vol) if c.audio else self.make_silence(c.duration))
+                    c = c.with_effects([vfx.Crop(x1=int(w*0.1), y1=int(h*0.1), width=int(w*0.8), height=int(h*0.8)), vfx.Resize(height=res_h)])
+
+                c = self.apply_color_filter(c, fltr)
                 if trans != "Hard Cut": c = self.apply_advanced_transition(c, trans)
+                
+                if not is_img:
+                    c = c.with_audio(c.audio.with_volume_scaled(v_vol) if c.audio else self.make_silence(c.duration))
+                else:
+                    c = c.with_audio(self.make_silence(c.duration))
+                    
                 clips.append(c)
+                
             for page in self.end_pages:
                 text = page["text"].strip()
                 if text:
                     c = self.create_text_clip(text, font_size=page["size"], text_color=page["color"])
                     if trans != "Hard Cut": c = self.apply_advanced_transition(c, trans)
                     clips.append(c)
+                    
             self.update_status("Stitching...", 0.85)
             padding = -1 if trans in ["Cross Dissolve", "Whip Pan", "Zoom In/Out", "Glitch", "White Flash", "Random", "J-Cut", "L-Cut"] else 0
             final = concatenate_videoclips(clips, method="compose", padding=padding)
+            
             if self.background_audio_path:
                 self.update_status("Mixing audio...", 0.9)
                 bg = AudioFileClip(self.background_audio_path)
                 if bg.duration < final.duration: bg = concatenate_audioclips([bg] * int(np.ceil(final.duration/bg.duration)))
                 bg = bg.subclipped(0, final.duration).with_volume_scaled(0.5)
                 final = final.with_audio(CompositeAudioClip([final.audio, bg]))
+                
             self.update_status("Rendering...", 0.95)
             final.write_videofile(out, fps=24, codec="libx264", audio_codec="aac", logger=None)
             for c in clips: c.close()

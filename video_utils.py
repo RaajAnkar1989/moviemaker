@@ -1,6 +1,7 @@
 import os
 import platform
 import random
+import subprocess
 
 import numpy as np
 from PIL import Image
@@ -16,6 +17,7 @@ from proglog import ProgressBarLogger
 
 MAX_IMAGE_PIXELS = 12_000_000
 PHOTO_FPS = 20
+OUTPUT_FPS = 24
 SEPIA_MATRIX = np.array(
     [[0.393, 0.769, 0.189], [0.349, 0.686, 0.168], [0.272, 0.534, 0.131]]
 )
@@ -29,6 +31,53 @@ def even(value):
 
 def get_thread_count():
     return max(1, (os.cpu_count() or 4) - 1)
+
+
+def is_streamlit_cloud():
+    return bool(os.getenv("STREAMLIT_CLOUD_APP_ID"))
+
+
+def get_runtime_profile():
+    if is_streamlit_cloud():
+        return {
+            "name": "cloud",
+            "max_upload_mb": 200,
+            "max_clips": 12,
+            "max_duration_sec": 90,
+            "max_image_pixels": 1_500_000,
+            "default_res": 360,
+            "res_options": [360, 480],
+            "default_quality": "Small (Low Bitrate)",
+            "quality_options": ["Small (Low Bitrate)", "Standard (Medium)"],
+            "default_transition_index": 0,
+            "default_watermark": False,
+            "output_fps": 18,
+            "photo_fps": 12,
+            "threads": 2,
+            "preprocess_uploads": True,
+            "title_duration": 2,
+        }
+    return {
+        "name": "local",
+        "max_upload_mb": 1000,
+        "max_clips": 50,
+        "max_duration_sec": 600,
+        "max_image_pixels": MAX_IMAGE_PIXELS,
+        "default_res": 720,
+        "res_options": [360, 480, 720, 1080],
+        "default_quality": "Standard (Medium)",
+        "quality_options": ["Small (Low Bitrate)", "Standard (Medium)", "Cinematic (High)", "Pro (Ultra)"],
+        "default_transition_index": 1,
+        "default_watermark": True,
+        "output_fps": OUTPUT_FPS,
+        "photo_fps": PHOTO_FPS,
+        "threads": get_thread_count(),
+        "preprocess_uploads": False,
+        "title_duration": 3,
+    }
+
+
+PROFILE = get_runtime_profile()
 
 
 def _videotoolbox_available():
@@ -62,23 +111,26 @@ def _videotoolbox_available():
 
 
 def get_video_codec():
+    if is_streamlit_cloud():
+        return "libx264"
     if _videotoolbox_available():
         return "h264_videotoolbox"
     return "libx264"
 
 
-def get_write_kwargs(bitrate="3000k", logger=None):
+def get_write_kwargs(bitrate="3000k", logger=None, profile=None):
+    profile = profile or PROFILE
     kwargs = {
-        "fps": 24,
+        "fps": profile["output_fps"],
         "codec": get_video_codec(),
         "audio_codec": "aac",
         "bitrate": bitrate,
         "logger": logger,
-        "ffmpeg_params": ["-movflags", "+faststart"],
+        "ffmpeg_params": ["-movflags", "+faststart", "-tune", "zerolatency"],
     }
     if kwargs["codec"] == "libx264":
         kwargs["preset"] = "ultrafast"
-        kwargs["threads"] = get_thread_count()
+        kwargs["threads"] = profile["threads"]
     return kwargs
 
 
@@ -104,11 +156,13 @@ def crop_image_to_ratio(img, target_ratio):
     return img.crop((0, top, w, top + new_h))
 
 
-def load_working_image(path):
+def load_working_image(path, profile=None):
+    profile = profile or PROFILE
     img = Image.open(path)
     img = img.convert("RGB")
-    if img.width * img.height > MAX_IMAGE_PIXELS:
-        scale = (MAX_IMAGE_PIXELS / (img.width * img.height)) ** 0.5
+    max_pixels = profile["max_image_pixels"]
+    if img.width * img.height > max_pixels:
+        scale = (max_pixels / (img.width * img.height)) ** 0.5
         img = img.resize(
             (max(1, int(img.width * scale)), max(1, int(img.height * scale))),
             Image.Resampling.LANCZOS,
@@ -116,9 +170,56 @@ def load_working_image(path):
     return img
 
 
-def create_ken_burns_image_clip(path, duration, res_h, target_ratio):
+def preprocess_cloud_image(path, res_h=360):
+    profile = PROFILE
+    img = load_working_image(path, profile)
+    max_edge = even(max(res_h * 2, 640))
+    if max(img.size) > max_edge:
+        img.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+    out = os.path.splitext(path)[0] + "_cloud.jpg"
+    img.save(out, "JPEG", quality=82, optimize=True)
+    return out, os.path.getsize(out)
+
+
+def preprocess_cloud_video(path, res_h=360):
+    out = os.path.splitext(path)[0] + "_cloud.mp4"
+    if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(path):
+        return out, os.path.getsize(out)
+    target_h = even(res_h)
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-i", path,
+        "-vf", f"scale=-2:{target_h}",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+        "-c:a", "aac", "-b:a", "96k",
+        "-movflags", "+faststart",
+        out,
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return out, os.path.getsize(out)
+
+
+def preprocess_upload(path, is_image, res_h=360):
+    if not PROFILE["preprocess_uploads"]:
+        return path, os.path.getsize(path)
+    if is_image:
+        return preprocess_cloud_image(path, res_h)
+    return preprocess_cloud_video(path, res_h)
+
+
+def probe_video_duration(path):
+    try:
+        with VideoFileClip(path) as clip:
+            return clip.duration
+    except Exception:
+        return None
+
+
+def create_ken_burns_image_clip(path, duration, res_h, target_ratio, profile=None):
     """Build a photo clip with Ken Burns using crop (not per-frame resize)."""
-    img = load_working_image(path)
+    profile = profile or PROFILE
+    photo_fps = profile["photo_fps"]
+    img = load_working_image(path, profile)
     img = crop_image_to_ratio(img, target_ratio)
 
     target_w = even(int(res_h * target_ratio))
@@ -141,7 +242,7 @@ def create_ken_burns_image_clip(path, duration, res_h, target_ratio):
     return (
         ImageClip(frame)
         .with_duration(duration)
-        .with_fps(PHOTO_FPS)
+        .with_fps(photo_fps)
         .with_updated_frame_function(ken_burns)
     )
 
@@ -227,9 +328,10 @@ def fit_video_clip(clip, res_h, target_ratio, do_watermark=True):
     return clip
 
 
-def build_media_clip(path, is_image, duration, res_h, target_ratio, do_watermark, video_vol, filter_name):
+def build_media_clip(path, is_image, duration, res_h, target_ratio, do_watermark, video_vol, filter_name, profile=None):
+    profile = profile or PROFILE
     if is_image:
-        clip = create_ken_burns_image_clip(path, duration, res_h, target_ratio)
+        clip = create_ken_burns_image_clip(path, duration, res_h, target_ratio, profile)
         clip = clip.with_audio(make_silence(clip.duration))
     else:
         clip = VideoFileClip(path)
@@ -241,23 +343,24 @@ def build_media_clip(path, is_image, duration, res_h, target_ratio, do_watermark
     return clip
 
 
-def estimate_movie_duration(video_sequence, title_pages, end_pages):
+def estimate_movie_duration(video_sequence, title_pages, end_pages, profile=None):
+    profile = profile or PROFILE
+    title_dur = profile["title_duration"]
     total = 0.0
     for page in title_pages:
         if page.get("text", "").strip():
-            total += 3
+            total += title_dur
     for video in video_sequence:
         if video.get("is_image"):
             total += float(video.get("duration", 5))
+        elif video.get("duration") is not None:
+            total += float(video["duration"])
         else:
-            try:
-                with VideoFileClip(video["path"]) as clip:
-                    total += clip.duration
-            except Exception:
-                total += 5
+            probed = probe_video_duration(video["path"])
+            total += probed if probed else 5
     for page in end_pages:
         if page.get("text", "").strip():
-            total += 3
+            total += title_dur
     return total
 
 

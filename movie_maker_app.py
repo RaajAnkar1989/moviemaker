@@ -11,8 +11,11 @@ from video_utils import (
     build_media_clip,
     estimate_movie_duration,
     even,
+    get_runtime_profile,
     get_write_kwargs,
     make_silence,
+    preprocess_upload,
+    probe_video_duration,
     RenderProgressLogger,
 )
 
@@ -21,7 +24,9 @@ import qrcode
 from io import BytesIO
 
 # --- EXTREME STABILITY & PERFORMANCE CONFIG ---
-MAX_UPLOAD_MB = 1000 # Increased for local use
+PROFILE = get_runtime_profile()
+IS_LOCAL = PROFILE["name"] == "local"
+MAX_UPLOAD_MB = PROFILE["max_upload_mb"]
 TEMP_ROOT = tempfile.gettempdir()
 
 def get_local_ip():
@@ -34,8 +39,7 @@ def get_local_ip():
     except: return "127.0.0.1"
 
 # Robust Cloud Detection
-IS_LOCAL = not os.getenv("STREAMLIT_CLOUD_APP_ID") and not os.getenv("DYNO")
-LOCAL_IP = get_local_ip()
+LOCAL_IP = get_local_ip() if IS_LOCAL else "127.0.0.1"
 
 # Page Setup
 st.set_page_config(page_title="AI Movie Maker Pro", page_icon="🎬", layout="wide")
@@ -103,9 +107,91 @@ def create_text_clip(text, duration=4, color_rgb=(0,0,0), font_size=50, text_col
         txt = TextClip(text=text, font_size=font_size, color='white', size=target_size, method='caption').with_duration(duration).with_position('center')
     return CompositeVideoClip([bg, txt]).with_audio(make_silence(duration))
 
+INSTALL_REPO = "https://github.com/RaajAnkar1989/moviemaker.git"
+INSTALL_ONE_LINER_MAC = 'curl -fsSL https://raw.githubusercontent.com/RaajAnkar1989/moviemaker/main/install_local.sh | bash'
+INSTALL_ONE_LINER_WIN = 'git clone https://github.com/RaajAnkar1989/moviemaker.git %USERPROFILE%\\AIMovieMakerPro && cd %USERPROFILE%\\AIMovieMakerPro && install_local.bat'
+
+
+def _read_install_file(name):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+    return ""
+
+
+def render_local_install_section():
+    st.header("💾 Install Locally")
+    if IS_LOCAL:
+        st.success("You're already running the **local** app — full 1080p speed enabled.")
+        st.caption("Share `InstallLocal.command` with friends so they can install on their Mac.")
+    else:
+        st.markdown(
+            "Run on **your device** for faster renders, 1080p, and no upload limits. "
+            "One-time setup (~2 min)."
+        )
+
+    with st.expander("📥 Download installer", expanded=not IS_LOCAL):
+        mac_sh = _read_install_file("install_local.sh")
+        mac_cmd = _read_install_file("InstallLocal.command")
+        win_bat = _read_install_file("install_local.bat")
+
+        st.markdown("**macOS** — download, then double-click:")
+        if mac_cmd:
+            st.download_button(
+                "⬇️ InstallLocal.command (Mac)",
+                mac_cmd,
+                file_name="InstallLocal.command",
+                mime="application/x-sh",
+                key="dl_mac_cmd",
+            )
+        if mac_sh:
+            st.download_button(
+                "⬇️ install_local.sh (Mac/Linux terminal)",
+                mac_sh,
+                file_name="install_local.sh",
+                mime="application/x-sh",
+                key="dl_mac_sh",
+            )
+
+        st.markdown("**Windows** — download, then double-click:")
+        if win_bat:
+            st.download_button(
+                "⬇️ install_local.bat (Windows)",
+                win_bat,
+                file_name="install_local.bat",
+                mime="application/octet-stream",
+                key="dl_win_bat",
+            )
+
+        st.markdown("**Or paste in Terminal (Mac/Linux):**")
+        st.code(INSTALL_ONE_LINER_MAC, language="bash")
+        st.caption(f"Installs to `~/AIMovieMakerPro` from {INSTALL_REPO}")
+        st.caption("Mac: if blocked, right-click the file → Open the first time.")
+
+    with st.expander("📋 What gets installed"):
+        st.markdown(
+            """
+            1. Clones the app to `~/AIMovieMakerPro` (Mac/Linux) or `%USERPROFILE%\\AIMovieMakerPro` (Windows)
+            2. Creates a Python virtual environment
+            3. Installs dependencies (Streamlit, MoviePy, ffmpeg tools)
+            4. Adds a **Desktop shortcut** (Mac)
+            5. Opens the app at **http://localhost:8501**
+
+            **Requirements:** Python 3, Git, ffmpeg
+            """
+        )
+
 # --- MAIN APP ---
 def main():
     st.title("🎬 AI Movie Maker Pro")
+
+    if not IS_LOCAL:
+        st.warning(
+            "☁️ **Cloud Mode** — Optimized for Streamlit servers. "
+            "Defaults: 360p, Hard Cut, fast encode. Use ≤8 clips for best speed. "
+            "**Install locally** (sidebar) for 1080p and full speed."
+        )
     
     if st.session_state.gen_error:
         with st.container():
@@ -144,21 +230,29 @@ def main():
         aspect_choice = st.selectbox("Aspect Ratio", list(aspect_options.keys()), index=0)
         target_ratio = aspect_options[aspect_choice]
 
-        do_watermark = st.checkbox("Remove Watermarks (Smart Zoom)", value=True)
-        transition_style = st.selectbox("Transition Style", ["Hard Cut", "Cross Dissolve", "Fade In/Out", "Whip Pan", "Zoom In/Out", "Glitch", "White Flash", "Random"], index=1)
-        res_options = [360, 480, 720, 1080] if IS_LOCAL else [360, 480, 720]
-        default_res = 720 if IS_LOCAL else 480
-        res_h = st.select_slider("Resolution (Height)", options=res_options, value=default_res)
+        do_watermark = st.checkbox("Remove Watermarks (Smart Zoom)", value=PROFILE["default_watermark"])
+        transition_style = st.selectbox(
+            "Transition Style",
+            ["Hard Cut", "Cross Dissolve", "Fade In/Out", "Whip Pan", "Zoom In/Out", "Glitch", "White Flash", "Random"],
+            index=PROFILE["default_transition_index"],
+        )
+        res_h = st.select_slider("Resolution (Height)", options=PROFILE["res_options"], value=PROFILE["default_res"])
         
         st.header("💎 Quality & Size")
         quality_map = {"Small (Low Bitrate)": "1500k", "Standard (Medium)": "3000k", "Cinematic (High)": "6000k", "Pro (Ultra)": "12000k"}
-        quality_choice = st.select_slider("Export Quality", options=list(quality_map.keys()), value="Standard (Medium)")
+        quality_choice = st.select_slider(
+            "Export Quality",
+            options=PROFILE["quality_options"],
+            value=PROFILE["default_quality"],
+        )
         target_bitrate = quality_map[quality_choice]
         
         st.divider()
         st.header("🔊 Audio")
         video_vol = st.slider("Original Volume", 0.0, 2.0, 1.0)
         bg_vol = st.slider("Music Volume", 0.0, 2.0, 0.5)
+        st.divider()
+        render_local_install_section()
         st.divider()
         if st.button("🗑️ Clear Render Cache"): clear_cache()
         if st.button("🔄 Full Reset"): reset_app()
@@ -173,17 +267,30 @@ def main():
         
         if uploaded_videos:
             new_files_added = False
+            running_mb = total_size_mb
             for f in uploaded_videos:
                 file_id = f"{f.name}_{f.size}"
                 if file_id not in st.session_state.processed_uploads:
+                    if running_mb + f.size / (1024 * 1024) > MAX_UPLOAD_MB:
+                        st.error(f"Upload limit reached ({MAX_UPLOAD_MB}MB). Remove clips or run locally.")
+                        continue
+                    if len(st.session_state.video_sequence) >= PROFILE["max_clips"]:
+                        st.error(f"Clip limit reached ({PROFILE['max_clips']} max on cloud).")
+                        continue
                     t_path = os.path.join(st.session_state.temp_dir, f.name)
-                    with open(t_path, "wb") as tmp: tmp.write(f.getbuffer())
+                    with open(t_path, "wb") as tmp:
+                        tmp.write(f.getbuffer())
                     is_img = f.name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))
+                    with st.spinner(f"Optimizing {f.name}..." if PROFILE["preprocess_uploads"] else f"Saving {f.name}..."):
+                        t_path, new_size = preprocess_upload(t_path, is_img, res_h)
+                    native_duration = None if is_img else probe_video_duration(t_path)
                     st.session_state.video_sequence.append({
-                        "name": f.name, "path": t_path, "size": f.size, 
-                        "is_image": is_img, "duration": 5, "filter": "None"
+                        "name": f.name, "path": t_path, "size": new_size,
+                        "is_image": is_img, "duration": 5, "filter": "None",
+                        "native_duration": native_duration,
                     })
                     st.session_state.processed_uploads.add(file_id)
+                    running_mb += new_size / (1024 * 1024)
                     new_files_added = True
             if new_files_added:
                 st.rerun()
@@ -240,15 +347,17 @@ def main():
     with tab3:
         if st.session_state.video_sequence:
             est_duration = estimate_movie_duration(
-                st.session_state.video_sequence, st.session_state.title_pages, st.session_state.end_pages
+                st.session_state.video_sequence, st.session_state.title_pages, st.session_state.end_pages, PROFILE
             )
             clip_count = len(st.session_state.video_sequence)
             st.info(
                 f"Ready to render **{clip_count}** clip(s) · ~**{est_duration:.0f}s** total · "
-                f"**{res_h}p** · {get_write_kwargs()['codec']}"
+                f"**{res_h}p** @ {PROFILE['output_fps']}fps · {get_write_kwargs(profile=PROFILE)['codec']}"
             )
-            if transition_style != "Hard Cut":
-                st.caption("Tip: Hard Cut transitions render fastest.")
+            if not IS_LOCAL and est_duration > PROFILE["max_duration_sec"]:
+                st.error(f"Movie too long for cloud ({est_duration:.0f}s). Max ~{PROFILE['max_duration_sec']}s — use fewer/shorter clips.")
+            elif transition_style != "Hard Cut":
+                st.caption("Tip: Hard Cut transitions render much faster on cloud.")
 
         if st.session_state.last_output and os.path.exists(st.session_state.last_output):
             with open(st.session_state.last_output, "rb") as f:
@@ -262,6 +371,15 @@ def main():
         if st.button("🎬 GENERATE CINEMATIC MOVIE"):
             if not st.session_state.video_sequence:
                 st.error("No media uploaded!")
+                return
+            est_duration = estimate_movie_duration(
+                st.session_state.video_sequence, st.session_state.title_pages, st.session_state.end_pages, PROFILE
+            )
+            if len(st.session_state.video_sequence) > PROFILE["max_clips"]:
+                st.error(f"Too many clips for cloud ({PROFILE['max_clips']} max). Remove some first.")
+                return
+            if est_duration > PROFILE["max_duration_sec"]:
+                st.error(f"Movie too long ({est_duration:.0f}s). Cloud max is ~{PROFILE['max_duration_sec']}s.")
                 return
             
             pending_cache = []
@@ -308,7 +426,10 @@ def main():
                             all_clips.append(VideoFileClip(p))
                         else:
                             update_build_progress("Titles...")
-                            c = create_text_clip(page["text"], 3, bg_colors[color_choice], page["size"], page["color"], res_h=res_h, target_ratio=target_ratio)
+                            c = create_text_clip(
+                                page["text"], PROFILE["title_duration"], bg_colors[color_choice],
+                                page["size"], page["color"], res_h=res_h, target_ratio=target_ratio,
+                            )
                             c = apply_transition(c, transition_style)
                             all_clips.append(c)
                             pending_cache.append((cache_key, p, c))
@@ -332,6 +453,7 @@ def main():
                             do_watermark,
                             video_vol,
                             video.get("filter", "None"),
+                            PROFILE,
                         )
                         clip = apply_transition(clip, transition_style)
                         all_clips.append(clip)
@@ -347,7 +469,10 @@ def main():
                             all_clips.append(VideoFileClip(p))
                         else:
                             update_build_progress("Credits...")
-                            c = create_text_clip(page["text"], 3, bg_colors[color_choice], page["size"], page["color"], res_h=res_h, target_ratio=target_ratio)
+                            c = create_text_clip(
+                                page["text"], PROFILE["title_duration"], bg_colors[color_choice],
+                                page["size"], page["color"], res_h=res_h, target_ratio=target_ratio,
+                            )
                             c = apply_transition(c, transition_style)
                             all_clips.append(c)
                             pending_cache.append((cache_key, p, c))
@@ -381,7 +506,9 @@ def main():
 
                 out = os.path.join(st.session_state.temp_dir, f"final_{int(time.time())}.mp4")
                 render_logger = RenderProgressLogger(on_render_progress)
-                final_video.write_videofile(out, **get_write_kwargs(bitrate=target_bitrate, logger=render_logger))
+                final_video.write_videofile(
+                    out, **get_write_kwargs(bitrate=target_bitrate, logger=render_logger, profile=PROFILE)
+                )
                 final_video.close()
                 for c in all_clips: c.close()
                 gc.collect()
@@ -396,7 +523,7 @@ def main():
                 for cache_key, p, clip in pending_cache:
                     if cache_key not in st.session_state.processed_clips:
                         try:
-                            clip.write_videofile(p, **get_write_kwargs(bitrate="1500k"))
+                            clip.write_videofile(p, **get_write_kwargs(bitrate="1500k", profile=PROFILE))
                             st.session_state.processed_clips[cache_key] = p
                         except Exception:
                             pass

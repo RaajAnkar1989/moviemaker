@@ -13,6 +13,7 @@ from video_utils import (
     even,
     get_runtime_profile,
     get_write_kwargs,
+    is_streamlit_cloud_env,
     make_silence,
     preprocess_upload,
     probe_video_duration,
@@ -29,6 +30,36 @@ IS_LOCAL = PROFILE["name"] == "local"
 MAX_UPLOAD_MB = PROFILE["max_upload_mb"]
 TEMP_ROOT = tempfile.gettempdir()
 
+
+def resolve_is_local():
+    """Only true on localhost / LAN — never on streamlit.app."""
+    if is_streamlit_cloud_env():
+        return False
+    try:
+        url = str(getattr(st.context, "url", "") or "").lower()
+        host = ""
+        if getattr(st.context, "headers", None):
+            host = str(st.context.headers.get("Host", "")).lower()
+        combined = f"{url} {host}"
+        if "streamlit.app" in combined or "share.streamlit.io" in combined:
+            return False
+        if "localhost" in url or "127.0.0.1" in url:
+            return True
+        import re
+        if re.search(r"https?://(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)", url):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def refresh_deployment_settings():
+    global IS_LOCAL, PROFILE, MAX_UPLOAD_MB, LOCAL_IP
+    IS_LOCAL = resolve_is_local()
+    PROFILE = get_runtime_profile(force_cloud=not IS_LOCAL)
+    MAX_UPLOAD_MB = PROFILE["max_upload_mb"]
+    LOCAL_IP = get_local_ip() if IS_LOCAL else "127.0.0.1"
+
 def get_local_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -38,8 +69,7 @@ def get_local_ip():
         return ip
     except: return "127.0.0.1"
 
-# Robust Cloud Detection
-LOCAL_IP = get_local_ip() if IS_LOCAL else "127.0.0.1"
+LOCAL_IP = "127.0.0.1"
 
 # Page Setup
 st.set_page_config(page_title="AI Movie Maker Pro", page_icon="🎬", layout="wide")
@@ -123,16 +153,17 @@ def _read_install_file(name):
 def render_local_install_section(compact=False):
     if not compact:
         st.header("💾 Install Locally")
-    if IS_LOCAL:
-        st.success("You're already running the **local** app — full 1080p speed enabled.")
-        if not compact:
-            st.caption("Share `InstallLocal.command` with friends so they can install on their Mac.")
-        return
 
-    st.markdown(
-        "Run on **your device** for faster renders, **1080p**, and no upload limits. "
-        "One-time setup (~2 min)."
-    )
+    if IS_LOCAL:
+        st.info(
+            "You're on a **local** copy (localhost/LAN). "
+            "Download below to install on another computer."
+        )
+    else:
+        st.markdown(
+            "You're on the **free cloud site** (slow, 360p). "
+            "Install on **your Mac/PC** for **1080p** and much faster renders (~2 min setup)."
+        )
 
     mac_sh = _read_install_file("install_local.sh")
     mac_cmd = _read_install_file("InstallLocal.command")
@@ -191,13 +222,16 @@ def render_local_install_section(compact=False):
 
 # --- MAIN APP ---
 def main():
+    refresh_deployment_settings()
     st.title("🎬 AI Movie Maker Pro")
 
     if not IS_LOCAL:
         st.warning(
-            "☁️ **Cloud Mode** — slower & limited to 360p. "
-            "Open the **💾 Install App** tab for a free local install (1080p, full speed)."
+            "☁️ **Cloud site** — limited speed & 360p. "
+            "Tap the **💾 Install App** tab to download the local installer (1080p, full speed)."
         )
+    else:
+        st.success("💻 **Running locally** — full 1080p speed enabled.")
     
     if st.session_state.gen_error:
         with st.container():
@@ -211,24 +245,25 @@ def main():
     remaining_mb = MAX_UPLOAD_MB - total_size_mb
 
     with st.sidebar:
+        st.markdown("### 💾 Install Locally")
+        mac_cmd = _read_install_file("InstallLocal.command")
+        if mac_cmd:
+            st.download_button(
+                "⬇️ Download Mac Installer",
+                mac_cmd,
+                file_name="InstallLocal.command",
+                mime="application/x-sh",
+                key="dl_mac_sidebar",
+                use_container_width=True,
+            )
         if not IS_LOCAL:
-            st.markdown("### 💾 Install Locally")
-            mac_cmd = _read_install_file("InstallLocal.command")
-            if mac_cmd:
-                st.download_button(
-                    "⬇️ Download Mac Installer",
-                    mac_cmd,
-                    file_name="InstallLocal.command",
-                    mime="application/x-sh",
-                    key="dl_mac_sidebar",
-                    use_container_width=True,
-                )
-            st.caption("Or open the **Install App** tab →")
-            st.divider()
+            st.caption("Cloud site — install for 1080p speed")
+        else:
+            st.caption("Share installer with friends")
+        st.caption("Full options in **Install App** tab →")
+        st.divider()
 
         if IS_LOCAL:
-            st.success("💻 **Running Locally** (Full Power)")
-            st.markdown("### 📱 Mobile App Link")
             mobile_url = f"http://{LOCAL_IP}:8501"
             qr = qrcode.QRCode(version=1, box_size=10, border=5)
             qr.add_data(mobile_url)

@@ -33,48 +33,74 @@ def get_thread_count():
     return max(1, (os.cpu_count() or 4) - 1)
 
 
+def is_streamlit_cloud_env():
+    """Detect Streamlit Community Cloud from runtime environment."""
+    if any(
+        os.getenv(key)
+        for key in (
+            "STREAMLIT_CLOUD_APP_ID",
+            "STREAMLIT_SHARING",
+            "STREAMLIT_CLOUD",
+            "IS_STREAMLIT_SHARING",
+        )
+    ):
+        return True
+    if os.getenv("USER") == "appuser":
+        return True
+    if os.path.isdir("/home/appuser/.streamlit"):
+        return True
+    if os.path.isfile("/app/.supervisord.conf"):
+        return True
+    return False
+
+
 def is_streamlit_cloud():
-    return bool(os.getenv("STREAMLIT_CLOUD_APP_ID"))
+    return is_streamlit_cloud_env()
 
 
-def get_runtime_profile():
-    if is_streamlit_cloud():
-        return {
-            "name": "cloud",
-            "max_upload_mb": 200,
-            "max_clips": 12,
-            "max_duration_sec": 90,
-            "max_image_pixels": 1_500_000,
-            "default_res": 360,
-            "res_options": [360, 480],
-            "default_quality": "Small (Low Bitrate)",
-            "quality_options": ["Small (Low Bitrate)", "Standard (Medium)"],
-            "default_transition_index": 0,
-            "default_watermark": False,
-            "output_fps": 18,
-            "photo_fps": 12,
-            "threads": 2,
-            "preprocess_uploads": True,
-            "title_duration": 2,
-        }
-    return {
-        "name": "local",
-        "max_upload_mb": 1000,
-        "max_clips": 50,
-        "max_duration_sec": 600,
-        "max_image_pixels": MAX_IMAGE_PIXELS,
-        "default_res": 720,
-        "res_options": [360, 480, 720, 1080],
-        "default_quality": "Standard (Medium)",
-        "quality_options": ["Small (Low Bitrate)", "Standard (Medium)", "Cinematic (High)", "Pro (Ultra)"],
-        "default_transition_index": 1,
-        "default_watermark": True,
-        "output_fps": OUTPUT_FPS,
-        "photo_fps": PHOTO_FPS,
-        "threads": get_thread_count(),
-        "preprocess_uploads": False,
-        "title_duration": 3,
-    }
+_CLOUD_PROFILE = {
+    "name": "cloud",
+    "max_upload_mb": 200,
+    "max_clips": 12,
+    "max_duration_sec": 90,
+    "max_image_pixels": 1_500_000,
+    "default_res": 360,
+    "res_options": [360, 480],
+    "default_quality": "Small (Low Bitrate)",
+    "quality_options": ["Small (Low Bitrate)", "Standard (Medium)"],
+    "default_transition_index": 0,
+    "default_watermark": False,
+    "output_fps": 18,
+    "photo_fps": 12,
+    "threads": 2,
+    "preprocess_uploads": True,
+    "title_duration": 2,
+}
+
+_LOCAL_PROFILE = {
+    "name": "local",
+    "max_upload_mb": 1000,
+    "max_clips": 50,
+    "max_duration_sec": 600,
+    "max_image_pixels": MAX_IMAGE_PIXELS,
+    "default_res": 720,
+    "res_options": [360, 480, 720, 1080],
+    "default_quality": "Standard (Medium)",
+    "quality_options": ["Small (Low Bitrate)", "Standard (Medium)", "Cinematic (High)", "Pro (Ultra)"],
+    "default_transition_index": 1,
+    "default_watermark": True,
+    "output_fps": OUTPUT_FPS,
+    "photo_fps": PHOTO_FPS,
+    "threads": get_thread_count(),
+    "preprocess_uploads": False,
+    "title_duration": 3,
+}
+
+
+def get_runtime_profile(force_cloud=False):
+    if force_cloud or is_streamlit_cloud_env():
+        return dict(_CLOUD_PROFILE)
+    return dict(_LOCAL_PROFILE)
 
 
 PROFILE = get_runtime_profile()

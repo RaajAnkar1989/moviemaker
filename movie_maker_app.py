@@ -5,9 +5,10 @@ import random
 import time
 import gc
 import shutil
-from moviepy import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, ColorClip, AudioClip, AudioFileClip, CompositeAudioClip, concatenate_audioclips, ImageClip
+from moviepy import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, ColorClip, AudioClip, AudioFileClip, CompositeAudioClip, concatenate_audioclips
 import moviepy.video.fx as vfx
 import numpy as np
+from video_utils import create_ken_burns_image_clip, get_write_kwargs, RenderProgressLogger
 
 import socket
 import qrcode
@@ -268,14 +269,20 @@ def main():
                 st.error("No media uploaded!")
                 return
             
+            pending_cache = []
             try:
                 st.session_state.gen_error = None
                 gen_progress = st.progress(0)
                 gen_status = st.empty()
                 
-                processed_paths = []
-                total_steps = len(st.session_state.title_pages) + len(st.session_state.video_sequence) + len(st.session_state.end_pages) + 2
+                all_clips = []
+                pending_cache.clear()
+                clip_count = sum(1 for p in st.session_state.title_pages if p["text"].strip())
+                clip_count += len(st.session_state.video_sequence)
+                clip_count += sum(1 for p in st.session_state.end_pages if p["text"].strip())
+                total_steps = clip_count + 2
                 step = 0
+                render_start = 0.65
 
                 current_config = {
                     "bg_color": color_choice,
@@ -289,108 +296,93 @@ def main():
                     st.session_state.processed_clips = {}
                     st.session_state.last_config = current_config
 
+                def update_build_progress(label):
+                    nonlocal step
+                    step += 1
+                    build_pct = (step / max(total_steps, 1)) * render_start
+                    gen_status.text(f"Step {step}/{total_steps}: {label}")
+                    gen_progress.progress(build_pct)
+
                 # 1. Process Titles
                 for i, page in enumerate(st.session_state.title_pages):
                     if page["text"].strip():
-                        step += 1
-                        gen_status.text(f"Step {step}/{total_steps}: Titles...")
-                        gen_progress.progress(step/total_steps)
-                        
                         p = os.path.join(st.session_state.temp_dir, f"t_{i}.mp4")
                         cache_key = f"t_{i}_{page['text']}_{page['size']}_{page['color']}"
-                        
                         if cache_key in st.session_state.processed_clips and os.path.exists(p):
-                            gen_status.text(f"Step {step}/{total_steps}: Titles (Restored)")
+                            update_build_progress("Titles (Restored)")
+                            all_clips.append(VideoFileClip(p))
                         else:
+                            update_build_progress("Titles...")
                             c = create_text_clip(page["text"], 3, bg_colors[color_choice], page["size"], page["color"], res_h=res_h, target_ratio=target_ratio)
                             c = apply_transition(c, transition_style)
-                            c.write_videofile(p, fps=24, codec="libx264", logger=None, preset="ultrafast")
-                            c.close(); gc.collect()
-                            st.session_state.processed_clips[cache_key] = p
-                        processed_paths.append(p)
+                            all_clips.append(c)
+                            pending_cache.append((cache_key, p, c))
 
                 # 2. Process Main Clips
                 for i, video in enumerate(st.session_state.video_sequence):
-                    step += 1
-                    gen_status.text(f"Step {step}/{total_steps}: Processing {video['name']}...")
-                    gen_progress.progress(step/total_steps)
-                    
                     p = os.path.join(st.session_state.temp_dir, f"v_{i}.mp4")
-                    # Cache key includes filename, size, duration, filter
                     cache_key = f"v_{i}_{video['name']}_{video['size']}_{video.get('duration', 0)}_{video.get('filter', 'None')}"
-                    
+
                     if cache_key in st.session_state.processed_clips and os.path.exists(p):
-                        gen_status.text(f"Step {step}/{total_steps}: {video['name']} (Restored)")
+                        update_build_progress(f"{video['name']} (Restored)")
+                        all_clips.append(VideoFileClip(p))
                     else:
+                        update_build_progress(f"Processing {video['name']}...")
                         is_img = video.get("is_image", False)
                         if is_img:
-                            clip = ImageClip(video['path']).with_duration(video.get("duration", 5))
-                            # Ken Burns dynamic pan/zoom (slow 10% zoom)
-                            clip = clip.with_effects([vfx.Resize(lambda t: 1 + 0.1 * (t / clip.duration))])
+                            clip = create_ken_burns_image_clip(
+                                video['path'], video.get("duration", 5), res_h, target_ratio
+                            )
                         else:
                             clip = VideoFileClip(video['path'])
-
-                        # Crop to target_ratio
-                        w, h = clip.size
-                        clip_ratio = w / h
-                        if abs(clip_ratio - target_ratio) > 0.05:
-                            if clip_ratio > target_ratio:
-                                new_w = int(h * target_ratio)
-                                clip = clip.with_effects([vfx.Crop(x_center=w/2, y_center=h/2, width=new_w, height=h)])
-                            else:
-                                new_h = int(w / target_ratio)
-                                clip = clip.with_effects([vfx.Crop(x_center=w/2, y_center=h/2, width=w, height=new_h)])
-
-                        # Resize to target res_h
-                        if clip.h != res_h: 
-                            clip = clip.with_effects([vfx.Resize(height=res_h)])
-                            
-                        # Watermark removal
-                        if not is_img and do_watermark:
                             w, h = clip.size
-                            clip = clip.with_effects([vfx.Crop(x1=int(w*0.1), y1=int(h*0.1), width=int(w*0.8), height=int(h*0.8)), vfx.Resize(height=res_h)])
+                            clip_ratio = w / h
+                            if abs(clip_ratio - target_ratio) > 0.05:
+                                if clip_ratio > target_ratio:
+                                    new_w = int(h * target_ratio)
+                                    clip = clip.with_effects([vfx.Crop(x_center=w/2, y_center=h/2, width=new_w, height=h)])
+                                else:
+                                    new_h = int(w / target_ratio)
+                                    clip = clip.with_effects([vfx.Crop(x_center=w/2, y_center=h/2, width=w, height=new_h)])
+                            if clip.h != res_h:
+                                clip = clip.with_effects([vfx.Resize(height=res_h)])
+                            if do_watermark:
+                                w, h = clip.size
+                                clip = clip.with_effects([vfx.Crop(x1=int(w*0.1), y1=int(h*0.1), width=int(w*0.8), height=int(h*0.8)), vfx.Resize(height=res_h)])
 
                         clip = apply_color_filter(clip, video.get("filter", "None"))
                         clip = apply_transition(clip, transition_style)
-                        
+
                         if not is_img:
                             clip = clip.with_audio(clip.audio.with_volume_scaled(video_vol) if clip.audio else make_silence(clip.duration))
                         else:
                             clip = clip.with_audio(make_silence(clip.duration))
-                            
-                        clip.write_videofile(p, fps=24, codec="libx264", audio_codec="aac", logger=None, preset="ultrafast", bitrate=target_bitrate)
-                        clip.close(); gc.collect()
-                        st.session_state.processed_clips[cache_key] = p
-                    processed_paths.append(p)
+
+                        all_clips.append(clip)
+                        pending_cache.append((cache_key, p, clip))
 
                 # 3. Credits
                 for i, page in enumerate(st.session_state.end_pages):
                     if page["text"].strip():
-                        step += 1
-                        gen_status.text(f"Step {step}/{total_steps}: Credits...")
-                        gen_progress.progress(step/total_steps)
-                        
                         p = os.path.join(st.session_state.temp_dir, f"e_{i}.mp4")
                         cache_key = f"e_{i}_{page['text']}_{page['size']}_{page['color']}"
-                        
                         if cache_key in st.session_state.processed_clips and os.path.exists(p):
-                            gen_status.text(f"Step {step}/{total_steps}: Credits (Restored)")
+                            update_build_progress("Credits (Restored)")
+                            all_clips.append(VideoFileClip(p))
                         else:
+                            update_build_progress("Credits...")
                             c = create_text_clip(page["text"], 3, bg_colors[color_choice], page["size"], page["color"], res_h=res_h, target_ratio=target_ratio)
                             c = apply_transition(c, transition_style)
-                            c.write_videofile(p, fps=24, codec="libx264", logger=None, preset="ultrafast")
-                            c.close(); gc.collect()
-                            st.session_state.processed_clips[cache_key] = p
-                        processed_paths.append(p)
+                            all_clips.append(c)
+                            pending_cache.append((cache_key, p, c))
 
                 # 4. Final Join
                 step += 1
-                gen_status.text(f"Step {step}/{total_steps}: Final Stitching...")
-                gen_progress.progress(step/total_steps)
-                
-                final_clips = [VideoFileClip(p) for p in processed_paths]
+                gen_status.text(f"Step {step}/{total_steps}: Stitching clips...")
+                gen_progress.progress(render_start)
+
                 pad = -1 if transition_style != "Hard Cut" else 0
-                final_video = concatenate_videoclips(final_clips, method="compose", padding=pad)
+                final_video = concatenate_videoclips(all_clips, method="compose", padding=pad)
 
                 # 5. Audio
                 if uploaded_audio:
@@ -401,16 +393,34 @@ def main():
                     bg_a = bg_a.subclipped(0, final_video.duration).with_volume_scaled(bg_vol)
                     final_video = final_video.with_audio(CompositeAudioClip([final_video.audio, bg_a]))
 
-                # 6. Final Render
+                # 6. Final Render (single encode, multi-threaded)
+                step += 1
+                gen_status.text(f"Step {step}/{total_steps}: Rendering final video... 0%")
+
+                def on_render_progress(fraction):
+                    pct = render_start + fraction * (1.0 - render_start)
+                    gen_progress.progress(pct)
+                    gen_status.text(f"Step {step}/{total_steps}: Rendering final video... {int(fraction * 100)}%")
+
                 out = os.path.join(st.session_state.temp_dir, f"final_{int(time.time())}.mp4")
-                final_video.write_videofile(out, fps=24, codec="libx264", audio_codec="aac", preset="ultrafast", threads=1, bitrate=target_bitrate)
-                final_video.close(); [c.close() for c in final_clips]; gc.collect()
+                render_logger = RenderProgressLogger(on_render_progress)
+                final_video.write_videofile(out, **get_write_kwargs(bitrate=target_bitrate, logger=render_logger))
+                final_video.close()
+                for c in all_clips: c.close()
+                gc.collect()
                 
                 gen_status.markdown("<div class='success-box'>✅ Movie Ready! You can download it below.</div>", unsafe_allow_html=True)
                 gen_progress.progress(1.0)
                 st.balloons()
                 with open(out, "rb") as f: st.download_button("⬇️ DOWNLOAD MOVIE", f, file_name="ai_movie_pro.mp4")
             except Exception as e:
+                for cache_key, p, clip in pending_cache:
+                    if cache_key not in st.session_state.processed_clips:
+                        try:
+                            clip.write_videofile(p, **get_write_kwargs(bitrate="1500k"))
+                            st.session_state.processed_clips[cache_key] = p
+                        except Exception:
+                            pass
                 st.session_state.gen_error = str(e)
                 st.rerun()
 

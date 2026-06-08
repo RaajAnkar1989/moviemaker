@@ -4,9 +4,10 @@ import random
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
-from moviepy import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, ColorClip, AudioClip, AudioFileClip, CompositeAudioClip, concatenate_audioclips, ImageClip
+from moviepy import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, ColorClip, AudioClip, AudioFileClip, CompositeAudioClip, concatenate_audioclips
 import moviepy.video.fx as vfx
 import numpy as np
+from video_utils import create_ken_burns_image_clip, get_write_kwargs, RenderProgressLogger
 
 # Set appearance and theme
 ctk.set_appearance_mode("System")
@@ -348,8 +349,7 @@ class MovieMakerApp(ctk.CTk):
                 self.update_status(f"Processing clip {i+1}...", 0.1 + (i/len(self.selected_files))*0.6)
                 
                 if is_img:
-                    c = ImageClip(f).with_duration(dur)
-                    c = c.with_effects([vfx.Resize(lambda t: 1 + 0.1 * (t / c.duration))])
+                    c = create_ken_burns_image_clip(f, dur, res_h, target_ratio)
                 else:
                     c = VideoFileClip(f)
 
@@ -399,7 +399,11 @@ class MovieMakerApp(ctk.CTk):
                 final = final.with_audio(CompositeAudioClip([final.audio, bg]))
                 
             self.update_status("Rendering...", 0.95)
-            final.write_videofile(out, fps=24, codec="libx264", audio_codec="aac", logger=None)
+
+            def on_render_progress(fraction):
+                self.after(0, lambda: self.update_status(f"Rendering... {int(fraction * 100)}%", 0.95 + fraction * 0.05))
+
+            final.write_videofile(out, **get_write_kwargs(logger=RenderProgressLogger(on_render_progress)))
             for c in clips: c.close()
             final.close()
             self.update_status("✅ Ready!", 1.0); messagebox.showinfo("Done", f"Saved to {out}")

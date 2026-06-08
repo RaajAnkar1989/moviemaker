@@ -22,7 +22,7 @@ def create_bundle():
         "--onefile",
         "--windowed",
         "--name", "AIMovieMakerPro",
-        "--add-data", "requirements.txt:.",
+        "--add-data", "video_utils.py:.",
         "desktop_app.py"
     ])
 

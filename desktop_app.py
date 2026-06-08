@@ -1,13 +1,17 @@
 import os
 import threading
-import random
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
-from moviepy import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, ColorClip, AudioClip, AudioFileClip, CompositeAudioClip, concatenate_audioclips
-import moviepy.video.fx as vfx
-import numpy as np
-from video_utils import create_ken_burns_image_clip, get_write_kwargs, RenderProgressLogger
+from moviepy import TextClip, CompositeVideoClip, concatenate_videoclips, ColorClip, AudioFileClip, CompositeAudioClip, concatenate_audioclips
+from video_utils import (
+    apply_transition,
+    build_media_clip,
+    even,
+    get_write_kwargs,
+    make_silence,
+    RenderProgressLogger,
+)
 
 # Set appearance and theme
 ctk.set_appearance_mode("System")
@@ -36,6 +40,12 @@ class MovieMakerApp(ctk.CTk):
             "Deep Purple": (48, 25, 52),
             "Slate": (47, 79, 79),
             "White": (255, 255, 255)
+        }
+        self.quality_map = {
+            "Small (Low Bitrate)": "1500k",
+            "Standard (Medium)": "3000k",
+            "Cinematic (High)": "6000k",
+            "Pro (Ultra)": "12000k",
         }
 
         # UI Layout
@@ -75,6 +85,16 @@ class MovieMakerApp(ctk.CTk):
         self.aspect_menu = ctk.CTkComboBox(self.left_panel, values=["16:9 (Widescreen)", "9:16 (Vertical)", "1:1 (Square)", "4:3 (Standard)"], variable=self.aspect_var)
         self.aspect_menu.pack(padx=10, pady=5, fill="x")
 
+        ctk.CTkLabel(self.left_panel, text="Resolution (Height):").pack(padx=10, pady=(15, 0), anchor="w")
+        self.res_var = ctk.StringVar(value="720")
+        self.res_menu = ctk.CTkComboBox(self.left_panel, values=["360", "480", "720", "1080"], variable=self.res_var)
+        self.res_menu.pack(padx=10, pady=5, fill="x")
+
+        ctk.CTkLabel(self.left_panel, text="Export Quality:").pack(padx=10, pady=(15, 0), anchor="w")
+        self.quality_var = ctk.StringVar(value="Standard (Medium)")
+        self.quality_menu = ctk.CTkComboBox(self.left_panel, values=list(self.quality_map.keys()), variable=self.quality_var)
+        self.quality_menu.pack(padx=10, pady=5, fill="x")
+
         # Audio Section
         ctk.CTkLabel(self.left_panel, text="Background Music:", font=ctk.CTkFont(weight="bold")).pack(padx=10, pady=(20, 0), anchor="w")
         self.audio_label = ctk.CTkLabel(self.left_panel, text="No audio selected", font=ctk.CTkFont(size=11), wraplength=300)
@@ -87,13 +107,18 @@ class MovieMakerApp(ctk.CTk):
         self.video_volume_slider = ctk.CTkSlider(self.left_panel, from_=0, to=2)
         self.video_volume_slider.set(1.0)
         self.video_volume_slider.pack(padx=10, pady=5, fill="x")
+
+        ctk.CTkLabel(self.left_panel, text="Music Vol:").pack(padx=10, pady=(10, 0), anchor="w")
+        self.music_volume_slider = ctk.CTkSlider(self.left_panel, from_=0, to=2)
+        self.music_volume_slider.set(0.5)
+        self.music_volume_slider.pack(padx=10, pady=5, fill="x")
         
         # Cinematic Effects
         ctk.CTkLabel(self.left_panel, text="Industry Transitions:", font=ctk.CTkFont(weight="bold")).pack(padx=10, pady=(20, 0), anchor="w")
         self.transition_var = ctk.StringVar(value="Cross Dissolve")
         self.transition_menu = ctk.CTkComboBox(self.left_panel, values=[
             "Hard Cut", "Cross Dissolve", "Fade In/Out", "Whip Pan", 
-            "Zoom In/Out", "Glitch", "White Flash", "L-Cut", "J-Cut", "Random"
+            "Zoom In/Out", "Glitch", "White Flash", "Random"
         ], variable=self.transition_var)
         self.transition_menu.pack(padx=10, pady=5, fill="x")
 
@@ -198,11 +223,11 @@ class MovieMakerApp(ctk.CTk):
         if file: self.background_audio_path = file; self.audio_label.configure(text=os.path.basename(file))
 
     def add_files(self):
-        files = filedialog.askopenfilenames(filetypes=[("Media Files", "*.mp4 *.mov *.png *.jpg *.jpeg")])
+        files = filedialog.askopenfilenames(filetypes=[("Media Files", "*.mp4 *.mov *.png *.jpg *.jpeg *.webp")])
         if files:
             for f in files: 
                 if not any(item["path"] == f for item in self.selected_files):
-                    is_img = f.lower().endswith(('.png', '.jpg', '.jpeg'))
+                    is_img = f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))
                     self.selected_files.append({"path": f, "is_image": is_img, "duration": 5, "filter": "None"})
             self.refresh_video_list(); self.generate_button.configure(state="normal")
 
@@ -257,16 +282,13 @@ class MovieMakerApp(ctk.CTk):
         self.selected_files.pop(idx); self.refresh_video_list()
         if not self.selected_files: self.generate_button.configure(state="disabled")
 
-    def make_silence(self, duration):
-        return AudioClip(lambda t: np.zeros((len(t) if isinstance(t, np.ndarray) else 1, 2)), duration=duration, fps=44100)
-
     def create_text_clip(self, text, duration=4, font_size=70, text_color='white'):
         rgb = self.bg_colors.get(self.color_var.get(), (0, 0, 0))
         target_ratio_str = self.aspect_var.get()
         ratio_map = {"16:9 (Widescreen)": 16/9, "9:16 (Vertical)": 9/16, "1:1 (Square)": 1.0, "4:3 (Standard)": 4/3}
         target_ratio = ratio_map.get(target_ratio_str, 16/9)
-        res_h = 720
-        target_size = (int(res_h * target_ratio), res_h)
+        res_h = even(int(self.res_var.get()))
+        target_size = (even(int(res_h * target_ratio)), res_h)
 
         bg = ColorClip(size=target_size, color=rgb).with_duration(duration)
         try:
@@ -274,136 +296,81 @@ class MovieMakerApp(ctk.CTk):
         except:
             txt = TextClip(text=text, font_size=font_size, color='white', size=target_size, method='caption').with_duration(duration).with_position('center')
             
-        return CompositeVideoClip([bg, txt]).with_audio(self.make_silence(duration))
-
-    def apply_color_filter(self, clip, filter_name):
-        if filter_name == "None": return clip
-        if filter_name == "B&W": return clip.with_effects([vfx.BlackAndWhite()])
-        if filter_name == "Sepia":
-            def sepia(t):
-                frame = clip.get_frame(t)
-                sepia_filter = np.array([[0.393, 0.769, 0.189],
-                                       [0.349, 0.686, 0.168],
-                                       [0.272, 0.534, 0.131]])
-                return np.clip(frame @ sepia_filter.T, 0, 255).astype(np.uint8)
-            return clip.with_updated_frame_function(sepia)
-        if filter_name == "Vibrant": return clip.with_effects([vfx.MultiplyColor(1.5)])
-        if filter_name == "Dim": return clip.with_effects([vfx.MultiplyColor(0.7)])
-        return clip
+        return CompositeVideoClip([bg, txt]).with_audio(make_silence(duration))
 
     def start_processing(self):
         self.processing = True; self.generate_button.configure(state="disabled")
         threading.Thread(target=self.process_video, daemon=True).start()
 
-    def update_status(self, text, progress): self.status_label.configure(text=text); self.progress_bar.set(progress)
-
-    def apply_advanced_transition(self, clip, style):
-        if style == "Hard Cut": return clip
-        s = style if style != "Random" else random.choice([
-            "Cross Dissolve", "Fade In/Out", "Whip Pan", "Zoom In/Out", "Glitch", "White Flash"
-        ])
-        if s == "Cross Dissolve": return clip.with_effects([vfx.CrossFadeIn(1), vfx.CrossFadeOut(1)])
-        if s == "Fade In/Out": return clip.with_effects([vfx.FadeIn(1), vfx.FadeOut(1)])
-        if s == "Whip Pan": return clip.with_effects([vfx.SlideIn(0.5, 'right'), vfx.SlideOut(0.5, 'left')])
-        if s == "Zoom In/Out": return clip.with_effects([vfx.Resize(lambda t: 1 + 0.05 * t)])
-        if s == "White Flash": 
-            flash = ColorClip(size=clip.size, color=(255, 255, 255)).with_duration(0.3).with_effects([vfx.FadeOut(0.3)])
-            return CompositeVideoClip([clip, flash.with_start(0)])
-        if s == "Glitch":
-            def glitch_effect(t):
-                frame = clip.get_frame(t)
-                if random.random() > 0.90:
-                    h, w, c = frame.shape
-                    shift = random.randint(-15, 15)
-                    frame = np.roll(frame, shift, axis=1)
-                return frame
-            return clip.with_updated_frame_function(glitch_effect)
-        return clip
+    def update_status(self, text, progress):
+        self.after(0, lambda: (self.status_label.configure(text=text), self.progress_bar.set(progress)))
 
     def process_video(self):
         try:
             out = filedialog.asksaveasfilename(defaultextension=".mp4", initialfile="movie_pro.mp4")
             if not out: return self.reset_ui()
             
-            v_vol = self.video_volume_slider.get(); trans = self.transition_var.get(); do_zoom = self.watermark_var.get()
+            v_vol = self.video_volume_slider.get()
+            bg_vol = self.music_volume_slider.get()
+            trans = self.transition_var.get()
+            do_zoom = self.watermark_var.get()
+            bitrate = self.quality_map.get(self.quality_var.get(), "3000k")
             
             target_ratio_str = self.aspect_var.get()
             ratio_map = {"16:9 (Widescreen)": 16/9, "9:16 (Vertical)": 9/16, "1:1 (Square)": 1.0, "4:3 (Standard)": 4/3}
             target_ratio = ratio_map.get(target_ratio_str, 16/9)
-            res_h = 720
+            res_h = int(self.res_var.get())
             
             clips = []
             for page in self.title_pages:
                 text = page["text"].strip()
                 if text:
                     c = self.create_text_clip(text, font_size=page["size"], text_color=page["color"])
-                    if trans != "Hard Cut": c = self.apply_advanced_transition(c, trans)
+                    if trans != "Hard Cut": c = apply_transition(c, trans)
                     clips.append(c)
                     
             for i, item in enumerate(self.selected_files):
-                f = item["path"]
-                is_img = item.get("is_image", False)
-                dur = item.get("duration", 5)
-                fltr = item.get("filter", "None")
-                
-                self.update_status(f"Processing clip {i+1}...", 0.1 + (i/len(self.selected_files))*0.6)
-                
-                if is_img:
-                    c = create_ken_burns_image_clip(f, dur, res_h, target_ratio)
-                else:
-                    c = VideoFileClip(f)
-
-                w, h = c.size
-                clip_ratio = w / h
-                if abs(clip_ratio - target_ratio) > 0.05:
-                    if clip_ratio > target_ratio:
-                        new_w = int(h * target_ratio)
-                        c = c.with_effects([vfx.Crop(x_center=w/2, y_center=h/2, width=new_w, height=h)])
-                    else:
-                        new_h = int(w / target_ratio)
-                        c = c.with_effects([vfx.Crop(x_center=w/2, y_center=h/2, width=w, height=new_h)])
-
-                if c.h != res_h: 
-                    c = c.with_effects([vfx.Resize(height=res_h)])
-                
-                if not is_img and do_zoom:
-                    w, h = c.size
-                    c = c.with_effects([vfx.Crop(x1=int(w*0.1), y1=int(h*0.1), width=int(w*0.8), height=int(h*0.8)), vfx.Resize(height=res_h)])
-
-                c = self.apply_color_filter(c, fltr)
-                if trans != "Hard Cut": c = self.apply_advanced_transition(c, trans)
-                
-                if not is_img:
-                    c = c.with_audio(c.audio.with_volume_scaled(v_vol) if c.audio else self.make_silence(c.duration))
-                else:
-                    c = c.with_audio(self.make_silence(c.duration))
-                    
+                self.update_status(f"Processing clip {i+1}/{len(self.selected_files)}...", 0.1 + (i/len(self.selected_files))*0.6)
+                c = build_media_clip(
+                    item["path"],
+                    item.get("is_image", False),
+                    item.get("duration", 5),
+                    res_h,
+                    target_ratio,
+                    do_zoom,
+                    v_vol,
+                    item.get("filter", "None"),
+                )
+                if trans != "Hard Cut":
+                    c = apply_transition(c, trans)
                 clips.append(c)
                 
             for page in self.end_pages:
                 text = page["text"].strip()
                 if text:
                     c = self.create_text_clip(text, font_size=page["size"], text_color=page["color"])
-                    if trans != "Hard Cut": c = self.apply_advanced_transition(c, trans)
+                    if trans != "Hard Cut": c = apply_transition(c, trans)
                     clips.append(c)
                     
             self.update_status("Stitching...", 0.85)
-            padding = -1 if trans in ["Cross Dissolve", "Whip Pan", "Zoom In/Out", "Glitch", "White Flash", "Random", "J-Cut", "L-Cut"] else 0
+            padding = -1 if trans != "Hard Cut" else 0
             final = concatenate_videoclips(clips, method="compose", padding=padding)
             
             if self.background_audio_path:
                 self.update_status("Mixing audio...", 0.9)
                 bg = AudioFileClip(self.background_audio_path)
-                if bg.duration < final.duration: bg = concatenate_audioclips([bg] * int(np.ceil(final.duration/bg.duration)))
-                bg = bg.subclipped(0, final.duration).with_volume_scaled(0.5)
+                if bg.duration < final.duration:
+                    import math
+                    bg = concatenate_audioclips([bg] * int(math.ceil(final.duration / bg.duration)))
+                bg = bg.subclipped(0, final.duration).with_volume_scaled(bg_vol)
                 final = final.with_audio(CompositeAudioClip([final.audio, bg]))
                 
-            self.update_status("Rendering...", 0.95)
+            self.update_status("Rendering... 0%", 0.95)
 
             def on_render_progress(fraction):
-                self.after(0, lambda: self.update_status(f"Rendering... {int(fraction * 100)}%", 0.95 + fraction * 0.05))
+                self.update_status(f"Rendering... {int(fraction * 100)}%", 0.95 + fraction * 0.05)
 
-            final.write_videofile(out, **get_write_kwargs(logger=RenderProgressLogger(on_render_progress)))
+            final.write_videofile(out, **get_write_kwargs(bitrate=bitrate, logger=RenderProgressLogger(on_render_progress)))
             for c in clips: c.close()
             final.close()
             self.update_status("✅ Ready!", 1.0); messagebox.showinfo("Done", f"Saved to {out}")

@@ -1,14 +1,20 @@
 import streamlit as st
 import os
 import tempfile
-import random
 import time
 import gc
 import shutil
-from moviepy import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, ColorClip, AudioClip, AudioFileClip, CompositeAudioClip, concatenate_audioclips
-import moviepy.video.fx as vfx
-import numpy as np
-from video_utils import create_ken_burns_image_clip, get_write_kwargs, RenderProgressLogger
+import math
+from moviepy import VideoFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, ColorClip, AudioFileClip, CompositeAudioClip, concatenate_audioclips
+from video_utils import (
+    apply_transition,
+    build_media_clip,
+    estimate_movie_duration,
+    even,
+    get_write_kwargs,
+    make_silence,
+    RenderProgressLogger,
+)
 
 import socket
 import qrcode
@@ -67,6 +73,7 @@ def init_state():
     if 'gen_error' not in st.session_state: st.session_state.gen_error = None
     if 'last_config' not in st.session_state: st.session_state.last_config = {}
     if 'processed_clips' not in st.session_state: st.session_state.processed_clips = {}
+    if 'last_output' not in st.session_state: st.session_state.last_output = None
 
 init_state()
 
@@ -86,50 +93,15 @@ def clear_cache():
     st.toast("Render cache cleared!")
 
 # --- CORE UTILITIES ---
-def make_silence(duration, fps=44100):
-    return AudioClip(lambda t: np.zeros((len(t) if isinstance(t, np.ndarray) else 1, 2)), duration=duration, fps=fps)
-
 def create_text_clip(text, duration=4, color_rgb=(0,0,0), font_size=50, text_color='white', res_h=480, target_ratio=16/9):
-    target_size = (int(res_h * target_ratio), res_h)
+    res_h = even(res_h)
+    target_size = (even(int(res_h * target_ratio)), res_h)
     bg = ColorClip(size=target_size, color=color_rgb).with_duration(duration)
     try:
         txt = TextClip(text=text, font_size=font_size, color=text_color.lower(), size=target_size, method='caption').with_duration(duration).with_position('center')
     except:
         txt = TextClip(text=text, font_size=font_size, color='white', size=target_size, method='caption').with_duration(duration).with_position('center')
     return CompositeVideoClip([bg, txt]).with_audio(make_silence(duration))
-
-def apply_transition(clip, style):
-    if style == "Hard Cut": return clip
-    s = style if style != "Random" else random.choice(["Cross Dissolve", "Fade In/Out", "Whip Pan", "Zoom In/Out", "Glitch", "White Flash"])
-    if s == "Cross Dissolve": return clip.with_effects([vfx.CrossFadeIn(1), vfx.CrossFadeOut(1)])
-    if s == "Fade In/Out": return clip.with_effects([vfx.FadeIn(1), vfx.FadeOut(1)])
-    if s == "Whip Pan": return clip.with_effects([vfx.SlideIn(0.5, 'right'), vfx.SlideOut(0.5, 'left')])
-    if s == "Zoom In/Out": return clip.with_effects([vfx.Resize(lambda t: 1 + 0.04 * t)])
-    if s == "White Flash": 
-        flash = ColorClip(size=clip.size, color=(255, 255, 255)).with_duration(0.2).with_effects([vfx.FadeOut(0.2)])
-        return CompositeVideoClip([clip, flash.with_start(0)])
-    if s == "Glitch":
-        def glitch_effect(t):
-            frame = clip.get_frame(t)
-            if random.random() > 0.92: frame = np.roll(frame, random.randint(-10, 10), axis=1)
-            return frame
-        return clip.with_updated_frame_function(glitch_effect)
-    return clip
-
-def apply_color_filter(clip, filter_name):
-    if filter_name == "None": return clip
-    if filter_name == "B&W": return clip.with_effects([vfx.BlackAndWhite()])
-    if filter_name == "Sepia":
-        def sepia(t):
-            frame = clip.get_frame(t)
-            sepia_filter = np.array([[0.393, 0.769, 0.189],
-                                   [0.349, 0.686, 0.168],
-                                   [0.272, 0.534, 0.131]])
-            return np.clip(frame @ sepia_filter.T, 0, 255).astype(np.uint8)
-        return clip.with_updated_frame_function(sepia)
-    if filter_name == "Vibrant": return clip.with_effects([vfx.MultiplyColor(1.5)])
-    if filter_name == "Dim": return clip.with_effects([vfx.MultiplyColor(0.7)])
-    return clip
 
 # --- MAIN APP ---
 def main():
@@ -195,7 +167,9 @@ def main():
 
     with tab1:
         st.markdown(f"<div class='upload-stats'>Storage Used: {total_size_mb:.1f}MB / {MAX_UPLOAD_MB}MB</div>", unsafe_allow_html=True)
-        uploaded_videos = st.file_uploader("Upload Clips & Photos", type=["mp4", "mov", "jpg", "jpeg", "png"], accept_multiple_files=True)
+        uploaded_videos = st.file_uploader(
+            "Upload Clips & Photos", type=["mp4", "mov", "jpg", "jpeg", "png", "webp"], accept_multiple_files=True
+        )
         
         if uploaded_videos:
             new_files_added = False
@@ -204,7 +178,7 @@ def main():
                 if file_id not in st.session_state.processed_uploads:
                     t_path = os.path.join(st.session_state.temp_dir, f.name)
                     with open(t_path, "wb") as tmp: tmp.write(f.getbuffer())
-                    is_img = f.name.lower().endswith(('.png', '.jpg', '.jpeg'))
+                    is_img = f.name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))
                     st.session_state.video_sequence.append({
                         "name": f.name, "path": t_path, "size": f.size, 
                         "is_image": is_img, "duration": 5, "filter": "None"
@@ -264,6 +238,27 @@ def main():
         if st.button("+ Add End Card"): st.session_state.end_pages.append({"text": "", "color": "White", "size": 50}); st.rerun()
 
     with tab3:
+        if st.session_state.video_sequence:
+            est_duration = estimate_movie_duration(
+                st.session_state.video_sequence, st.session_state.title_pages, st.session_state.end_pages
+            )
+            clip_count = len(st.session_state.video_sequence)
+            st.info(
+                f"Ready to render **{clip_count}** clip(s) · ~**{est_duration:.0f}s** total · "
+                f"**{res_h}p** · {get_write_kwargs()['codec']}"
+            )
+            if transition_style != "Hard Cut":
+                st.caption("Tip: Hard Cut transitions render fastest.")
+
+        if st.session_state.last_output and os.path.exists(st.session_state.last_output):
+            with open(st.session_state.last_output, "rb") as f:
+                st.download_button(
+                    "⬇️ DOWNLOAD LAST MOVIE",
+                    f,
+                    file_name="ai_movie_pro.mp4",
+                    key="download_last",
+                )
+
         if st.button("🎬 GENERATE CINEMATIC MOVIE"):
             if not st.session_state.video_sequence:
                 st.error("No media uploaded!")
@@ -328,36 +323,17 @@ def main():
                         all_clips.append(VideoFileClip(p))
                     else:
                         update_build_progress(f"Processing {video['name']}...")
-                        is_img = video.get("is_image", False)
-                        if is_img:
-                            clip = create_ken_burns_image_clip(
-                                video['path'], video.get("duration", 5), res_h, target_ratio
-                            )
-                        else:
-                            clip = VideoFileClip(video['path'])
-                            w, h = clip.size
-                            clip_ratio = w / h
-                            if abs(clip_ratio - target_ratio) > 0.05:
-                                if clip_ratio > target_ratio:
-                                    new_w = int(h * target_ratio)
-                                    clip = clip.with_effects([vfx.Crop(x_center=w/2, y_center=h/2, width=new_w, height=h)])
-                                else:
-                                    new_h = int(w / target_ratio)
-                                    clip = clip.with_effects([vfx.Crop(x_center=w/2, y_center=h/2, width=w, height=new_h)])
-                            if clip.h != res_h:
-                                clip = clip.with_effects([vfx.Resize(height=res_h)])
-                            if do_watermark:
-                                w, h = clip.size
-                                clip = clip.with_effects([vfx.Crop(x1=int(w*0.1), y1=int(h*0.1), width=int(w*0.8), height=int(h*0.8)), vfx.Resize(height=res_h)])
-
-                        clip = apply_color_filter(clip, video.get("filter", "None"))
+                        clip = build_media_clip(
+                            video["path"],
+                            video.get("is_image", False),
+                            video.get("duration", 5),
+                            res_h,
+                            target_ratio,
+                            do_watermark,
+                            video_vol,
+                            video.get("filter", "None"),
+                        )
                         clip = apply_transition(clip, transition_style)
-
-                        if not is_img:
-                            clip = clip.with_audio(clip.audio.with_volume_scaled(video_vol) if clip.audio else make_silence(clip.duration))
-                        else:
-                            clip = clip.with_audio(make_silence(clip.duration))
-
                         all_clips.append(clip)
                         pending_cache.append((cache_key, p, clip))
 
@@ -389,7 +365,8 @@ def main():
                     a_p = os.path.join(st.session_state.temp_dir, uploaded_audio.name)
                     with open(a_p, "wb") as t: t.write(uploaded_audio.getbuffer())
                     bg_a = AudioFileClip(a_p)
-                    if bg_a.duration < final_video.duration: bg_a = concatenate_audioclips([bg_a] * int(np.ceil(final_video.duration/bg_a.duration)))
+                    if bg_a.duration < final_video.duration:
+                        bg_a = concatenate_audioclips([bg_a] * int(math.ceil(final_video.duration / bg_a.duration)))
                     bg_a = bg_a.subclipped(0, final_video.duration).with_volume_scaled(bg_vol)
                     final_video = final_video.with_audio(CompositeAudioClip([final_video.audio, bg_a]))
 
@@ -409,10 +386,12 @@ def main():
                 for c in all_clips: c.close()
                 gc.collect()
                 
+                st.session_state.last_output = out
                 gen_status.markdown("<div class='success-box'>✅ Movie Ready! You can download it below.</div>", unsafe_allow_html=True)
                 gen_progress.progress(1.0)
                 st.balloons()
-                with open(out, "rb") as f: st.download_button("⬇️ DOWNLOAD MOVIE", f, file_name="ai_movie_pro.mp4")
+                with open(out, "rb") as f:
+                    st.download_button("⬇️ DOWNLOAD MOVIE", f, file_name="ai_movie_pro.mp4", key="download_new")
             except Exception as e:
                 for cache_key, p, clip in pending_cache:
                     if cache_key not in st.session_state.processed_clips:

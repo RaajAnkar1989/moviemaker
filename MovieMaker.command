@@ -1,6 +1,12 @@
 #!/bin/bash
 cd "$(dirname "$0")"
 if [ -d venv ]; then
-  source venv/bin/activate
+  PY="./venv/bin/python"
+else
+  PY="python3"
 fi
-python3 desktop_app.py
+if [[ "$(uname -m)" == "arm64" ]]; then
+  exec arch -arm64 "$PY" desktop_app.py
+else
+  exec "$PY" desktop_app.py
+fi

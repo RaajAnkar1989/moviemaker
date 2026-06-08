@@ -4,6 +4,10 @@ __pycache__/
 *$py.class
 venv/
 .env
+build/
+dist/
+*.dmg
+assets/.app_icon_square.png
 
 # MoviePy / Video
 *.mp4

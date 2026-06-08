@@ -48,29 +48,22 @@ fi
 
 cd "$INSTALL_DIR"
 
-if [[ ! -d venv ]]; then
-  echo "🐍 Creating Python environment..."
-  python3 -m venv venv
-fi
+bash "$INSTALL_DIR/scripts/setup_venv.sh"
 
-# shellcheck disable=SC1091
-source venv/bin/activate
-python -m pip install -U pip wheel
-pip install -r requirements.txt
-if [[ -f requirements-desktop.txt ]]; then
-  pip install -r requirements-desktop.txt
-fi
+chmod +x RunWebApp.command MovieMaker.command InstallLocal.command "Install Mac App.command" 2>/dev/null || true
+chmod +x scripts/install_mac_app.sh 2>/dev/null || true
 
-chmod +x RunWebApp.command MovieMaker.command InstallLocal.command 2>/dev/null || true
+if [[ "$(uname)" == "Darwin" ]]; then
+  echo "🍎 Installing Applications app..."
+  AIMM_INSTALL_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/scripts/install_mac_app.sh" <<< "n" || true
+fi
 
 DESKTOP=""
 if [[ "$(uname)" == "Darwin" ]] && [[ -d "$HOME/Desktop" ]]; then
   DESKTOP="$HOME/Desktop/Start AI Movie Maker.command"
   cat > "$DESKTOP" << LAUNCHER
 #!/bin/bash
-cd "$INSTALL_DIR"
-source venv/bin/activate
-exec python -m streamlit run movie_maker_app.py --server.maxUploadSize=1000
+open "$HOME/Applications/AI Movie Maker Pro.app"
 LAUNCHER
   chmod +x "$DESKTOP"
   echo "🖥️  Desktop shortcut: $DESKTOP"
@@ -80,8 +73,11 @@ echo ""
 echo "✅ Install complete!"
 echo "   Folder: $INSTALL_DIR"
 echo ""
-echo "🚀 Starting local app (1080p, full speed)..."
-echo "   Browser will open at http://localhost:8501"
+echo "🚀 Starting local app (native desktop window)..."
 echo ""
 
-exec python -m streamlit run movie_maker_app.py --server.maxUploadSize=1000
+if [[ "$(uname -m)" == "arm64" ]]; then
+  exec arch -arm64 venv/bin/python desktop_app.py
+else
+  exec venv/bin/python desktop_app.py
+fi

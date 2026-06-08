@@ -1,34 +1,12 @@
-import os
 import subprocess
 import sys
+from pathlib import Path
+
 
 def create_bundle():
-    print("📦 AI Movie Maker Pro - Distribution Bundler")
-    print("------------------------------------------")
-    
-    # 1. Install PyInstaller if missing
-    try:
-        import PyInstaller
-    except ImportError:
-        print("Installing PyInstaller...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
+    script = Path(__file__).resolve().parent / "scripts" / "build_dmg.sh"
+    subprocess.check_call(["bash", str(script)])
 
-    # 2. Package the Desktop App (Tkinter version)
-    # This is the easiest for users to run as a single file.
-    print("\n🔨 Building Desktop Standalone App...")
-    subprocess.check_call([
-        "pyinstaller",
-        "--noconfirm",
-        "--onefile",
-        "--windowed",
-        "--name", "AIMovieMakerPro",
-        "--add-data", "video_utils.py:.",
-        "desktop_app.py"
-    ])
-
-    print("\n✅ DONE!")
-    print("Your 'AIMovieMakerPro' app is now in the 'dist' folder.")
-    print("You can send this file to anyone on macOS, and it will run using THEIR RAM/CPU.")
 
 if __name__ == "__main__":
     create_bundle()

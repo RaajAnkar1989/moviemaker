@@ -1,8 +1,10 @@
 import os
+import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
+from PIL import Image, ImageTk
 from moviepy import TextClip, CompositeVideoClip, concatenate_videoclips, ColorClip, AudioFileClip, CompositeAudioClip, concatenate_audioclips
 from video_utils import (
     apply_transition,
@@ -17,6 +19,76 @@ from video_utils import (
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
+
+def _resource_path(*parts):
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, *parts)
+
+
+def _bind_scroll_children(scrollable: ctk.CTkScrollableFrame, scroll_fn):
+    canvas = scrollable._parent_canvas
+
+    def _bind_recursive(widget):
+        widget.bind("<MouseWheel>", scroll_fn, add="+")
+        widget.bind("<Button-4>", scroll_fn, add="+")
+        widget.bind("<Button-5>", scroll_fn, add="+")
+        for child in widget.winfo_children():
+            _bind_recursive(child)
+
+    canvas.bind("<MouseWheel>", scroll_fn, add="+")
+    scrollable._parent_frame.bind("<MouseWheel>", scroll_fn, add="+")
+    _bind_recursive(scrollable)
+
+
+def _enable_trackpad_scroll(scrollable: ctk.CTkScrollableFrame):
+    """CTkScrollableFrame does not scroll with macOS trackpad by default."""
+    canvas = scrollable._parent_canvas
+    active = {"bound": False}
+
+    def _scroll(event):
+        if getattr(event, "num", None) == 5 or getattr(event, "delta", 0) < 0:
+            canvas.yview_scroll(3, "units")
+        elif getattr(event, "num", None) == 4 or getattr(event, "delta", 0) > 0:
+            canvas.yview_scroll(-3, "units")
+
+    def _activate(_event=None):
+        if active["bound"]:
+            return
+        canvas.bind_all("<MouseWheel>", _scroll, add="+")
+        canvas.bind_all("<Button-4>", _scroll, add="+")
+        canvas.bind_all("<Button-5>", _scroll, add="+")
+        active["bound"] = True
+
+    def _deactivate(_event=None):
+        def _maybe_unbind():
+            if not _pointer_in_widget(scrollable):
+                if active["bound"]:
+                    canvas.unbind_all("<MouseWheel>")
+                    canvas.unbind_all("<Button-4>")
+                    canvas.unbind_all("<Button-5>")
+                    active["bound"] = False
+
+        scrollable.after_idle(_maybe_unbind)
+
+    scrollable.bind("<Enter>", _activate, add="+")
+    scrollable.bind("<Leave>", _deactivate, add="+")
+    _bind_scroll_children(scrollable, _scroll)
+    scrollable._rebind_scroll = lambda: _bind_scroll_children(scrollable, _scroll)
+
+
+def _pointer_in_widget(widget):
+    x, y = widget.winfo_pointerxy()
+    current = widget.winfo_containing(x, y)
+    while current is not None:
+        if current == widget:
+            return True
+        current = current.master
+    return False
+
+
 class MovieMakerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -24,6 +96,7 @@ class MovieMakerApp(ctk.CTk):
         self.title("AI Movie Maker Pro")
         self.after(0, lambda: self.state('zoomed'))
         self.geometry("1100x850")
+        self._set_window_icon()
 
         # Variables
         self.selected_files = [] # List of dicts: {"path": p, "is_image": bool, "duration": float, "filter": str}
@@ -57,6 +130,7 @@ class MovieMakerApp(ctk.CTk):
         self.left_panel = ctk.CTkScrollableFrame(self, width=350)
         self.left_panel.grid(row=0, column=0, rowspan=2, padx=20, pady=20, sticky="nsew")
         self.left_panel.grid_columnconfigure(0, weight=1)
+        _enable_trackpad_scroll(self.left_panel)
 
         ctk.CTkLabel(self.left_panel, text="Settings", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=10)
 
@@ -138,6 +212,7 @@ class MovieMakerApp(ctk.CTk):
         ctk.CTkLabel(self.right_panel, text="Media Sequence", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, pady=10)
         self.scroll_frame = ctk.CTkScrollableFrame(self.right_panel)
         self.scroll_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        _enable_trackpad_scroll(self.scroll_frame)
 
         self.list_controls = ctk.CTkFrame(self.right_panel, fg_color="transparent")
         self.list_controls.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
@@ -153,6 +228,17 @@ class MovieMakerApp(ctk.CTk):
         self.progress_bar.set(0)
         self.status_label = ctk.CTkLabel(self.status_frame, text="Ready")
         self.status_label.grid(row=1, column=0, padx=20, pady=(0, 10))
+
+    def _set_window_icon(self):
+        icon_path = _resource_path("assets", "app_icon.png")
+        if not os.path.isfile(icon_path):
+            return
+        try:
+            icon = Image.open(icon_path).resize((64, 64), Image.Resampling.LANCZOS)
+            self._window_icon = ImageTk.PhotoImage(icon)
+            self.iconphoto(True, self._window_icon)
+        except Exception:
+            pass
 
     def refresh_title_ui(self):
         for widget in self.title_frame.winfo_children(): widget.destroy()
@@ -176,6 +262,7 @@ class MovieMakerApp(ctk.CTk):
             color_menu.pack(side="left", padx=2)
             color_menu.configure(command=lambda val, idx=i: self.update_title_data(idx, "color", val))
             ctk.CTkButton(ctrls, text="✕", width=25, height=20, command=lambda idx=i: self.remove_title_page(idx), fg_color="#d32f2f").pack(side="right", padx=2)
+        self.left_panel._rebind_scroll()
 
     def refresh_end_ui(self):
         for widget in self.end_frame.winfo_children(): widget.destroy()
@@ -199,6 +286,7 @@ class MovieMakerApp(ctk.CTk):
             color_menu.pack(side="left", padx=2)
             color_menu.configure(command=lambda val, idx=i: self.update_end_data(idx, "color", val))
             ctk.CTkButton(ctrls, text="✕", width=25, height=20, command=lambda idx=i: self.remove_end_page(idx), fg_color="#d32f2f").pack(side="right", padx=2)
+        self.left_panel._rebind_scroll()
 
     def add_title_page(self): self.title_pages.append({"text": "", "color": "White", "size": 70}); self.refresh_title_ui()
     def remove_title_page(self, idx): 
@@ -265,6 +353,7 @@ class MovieMakerApp(ctk.CTk):
             filter_menu.set(item["filter"])
             filter_menu.pack(side="left", padx=5)
             filter_menu.configure(command=lambda val, idx=i: self.update_file_opt(idx, "filter", val))
+        self.scroll_frame._rebind_scroll()
 
     def update_file_opt(self, idx, key, val):
         if key == "duration":

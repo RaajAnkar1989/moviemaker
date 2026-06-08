@@ -2,6 +2,7 @@ import os
 import platform
 import random
 import subprocess
+import sys
 
 import numpy as np
 from PIL import Image
@@ -22,6 +23,20 @@ SEPIA_MATRIX = np.array(
     [[0.393, 0.769, 0.189], [0.349, 0.686, 0.168], [0.272, 0.534, 0.131]]
 )
 _use_videotoolbox = None
+
+
+def get_ffmpeg_exe():
+    if getattr(sys, "frozen", False):
+        bundle = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+        bundled = os.path.join(bundle, "ffmpeg")
+        if os.path.isfile(bundled):
+            return bundled
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
 
 
 def even(value):
@@ -213,7 +228,7 @@ def preprocess_cloud_video(path, res_h=360):
         return out, os.path.getsize(out)
     target_h = even(res_h)
     cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
+        get_ffmpeg_exe(), "-y", "-loglevel", "error",
         "-i", path,
         "-vf", f"scale=-2:{target_h}",
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",

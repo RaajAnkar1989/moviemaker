@@ -22,13 +22,13 @@ A professional cinematic video generation suite optimized for **Streamlit Cloud*
 
 Running locally on your Mac uses your full RAM and CPU, allowing for **1080p resolution** and faster rendering.
 
-### 1. Web Interface (Streamlit)
-Double-click `RunWebApp.command`. This allows you to use the app in your browser and even connect your phone via WiFi.
+### 3. Applications App (Recommended — Spotlight / Dock)
+Double-click **`Install Mac App.command`** once. This installs **AI Movie Maker Pro** into your **Applications** folder as a **native desktop app** (no browser).
 
-**Streamlit Cloud:** In [share.streamlit.io](https://share.streamlit.io) app settings, set the main file to **`streamlit_app.py`** (not `desktop_app.py`). Then reboot the app after each push.
+Launch from **Spotlight** (Cmd+Space → "AI Movie Maker") or **Applications**. A normal macOS window opens — not a browser tab.
 
-### 2. Desktop Interface (Native)
-Double-click `MovieMaker.command` for a native macOS window experience.
+### 4. Web Interface (Optional)
+Double-click `RunWebApp.command` if you prefer the browser version (Streamlit).
 
 ## 🛠️ Setup
 If the `.command` files don't open, run this in your terminal:

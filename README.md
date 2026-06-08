@@ -25,6 +25,8 @@ Running locally on your Mac uses your full RAM and CPU, allowing for **1080p res
 ### 1. Web Interface (Streamlit)
 Double-click `RunWebApp.command`. This allows you to use the app in your browser and even connect your phone via WiFi.
 
+**Streamlit Cloud:** In [share.streamlit.io](https://share.streamlit.io) app settings, set the main file to **`streamlit_app.py`** (not `desktop_app.py`). Then reboot the app after each push.
+
 ### 2. Desktop Interface (Native)
 Double-click `MovieMaker.command` for a native macOS window experience.
 

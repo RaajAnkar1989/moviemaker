@@ -25,6 +25,8 @@ import qrcode
 from io import BytesIO
 
 # --- EXTREME STABILITY & PERFORMANCE CONFIG ---
+APP_VERSION = "2.2.0"
+APP_ENTRY_FILE = "streamlit_app.py"  # Set this as main file in Streamlit Cloud settings
 PROFILE = get_runtime_profile()
 IS_LOCAL = PROFILE["name"] == "local"
 MAX_UPLOAD_MB = PROFILE["max_upload_mb"]
@@ -141,12 +143,26 @@ INSTALL_REPO = "https://github.com/RaajAnkar1989/moviemaker.git"
 INSTALL_ONE_LINER_MAC = 'curl -fsSL https://raw.githubusercontent.com/RaajAnkar1989/moviemaker/main/install_local.sh | bash'
 INSTALL_ONE_LINER_WIN = 'git clone https://github.com/RaajAnkar1989/moviemaker.git %USERPROFILE%\\AIMovieMakerPro && cd %USERPROFILE%\\AIMovieMakerPro && install_local.bat'
 
+_FALLBACK_MAC_INSTALLER = """#!/bin/bash
+set -e
+curl -fsSL "https://raw.githubusercontent.com/RaajAnkar1989/moviemaker/main/install_local.sh" | bash
+"""
+
+_FALLBACK_SH_INSTALLER = """#!/usr/bin/env bash
+curl -fsSL "https://raw.githubusercontent.com/RaajAnkar1989/moviemaker/main/install_local.sh" | bash
+"""
+
 
 def _read_install_file(name):
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as handle:
             return handle.read()
+    # Fallback if file missing on cloud filesystem
+    if name == "InstallLocal.command":
+        return _FALLBACK_MAC_INSTALLER
+    if name == "install_local.sh":
+        return _FALLBACK_SH_INSTALLER
     return ""
 
 
@@ -224,6 +240,7 @@ def render_local_install_section(compact=False):
 def main():
     refresh_deployment_settings()
     st.title("🎬 AI Movie Maker Pro")
+    st.caption(f"v{APP_VERSION} · {'☁️ Cloud' if not IS_LOCAL else '💻 Local'} · entry: `{APP_ENTRY_FILE}`")
 
     if not IS_LOCAL:
         st.warning(

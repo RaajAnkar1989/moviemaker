@@ -17,5 +17,5 @@ thumbnail.png
 # OS
 .DS_Store
 
-# Streamlit
-.streamlit/config.toml
+# Streamlit (config.toml is tracked; secrets stay local)
+.streamlit/secrets.toml

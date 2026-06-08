@@ -120,54 +120,61 @@ def _read_install_file(name):
     return ""
 
 
-def render_local_install_section():
-    st.header("💾 Install Locally")
+def render_local_install_section(compact=False):
+    if not compact:
+        st.header("💾 Install Locally")
     if IS_LOCAL:
         st.success("You're already running the **local** app — full 1080p speed enabled.")
-        st.caption("Share `InstallLocal.command` with friends so they can install on their Mac.")
-    else:
-        st.markdown(
-            "Run on **your device** for faster renders, 1080p, and no upload limits. "
-            "One-time setup (~2 min)."
-        )
+        if not compact:
+            st.caption("Share `InstallLocal.command` with friends so they can install on their Mac.")
+        return
 
-    with st.expander("📥 Download installer", expanded=not IS_LOCAL):
-        mac_sh = _read_install_file("install_local.sh")
-        mac_cmd = _read_install_file("InstallLocal.command")
-        win_bat = _read_install_file("install_local.bat")
+    st.markdown(
+        "Run on **your device** for faster renders, **1080p**, and no upload limits. "
+        "One-time setup (~2 min)."
+    )
 
-        st.markdown("**macOS** — download, then double-click:")
+    mac_sh = _read_install_file("install_local.sh")
+    mac_cmd = _read_install_file("InstallLocal.command")
+    win_bat = _read_install_file("install_local.bat")
+
+    st.markdown("#### ⬇️ Download & run")
+    col1, col2, col3 = st.columns(3)
+    with col1:
         if mac_cmd:
             st.download_button(
-                "⬇️ InstallLocal.command (Mac)",
+                "🍎 Mac (double-click)",
                 mac_cmd,
                 file_name="InstallLocal.command",
                 mime="application/x-sh",
-                key="dl_mac_cmd",
+                key="dl_mac_cmd_main" if compact else "dl_mac_cmd",
+                use_container_width=True,
             )
+    with col2:
         if mac_sh:
             st.download_button(
-                "⬇️ install_local.sh (Mac/Linux terminal)",
+                "🐧 Mac/Linux script",
                 mac_sh,
                 file_name="install_local.sh",
                 mime="application/x-sh",
-                key="dl_mac_sh",
+                key="dl_mac_sh_main" if compact else "dl_mac_sh",
+                use_container_width=True,
             )
-
-        st.markdown("**Windows** — download, then double-click:")
+    with col3:
         if win_bat:
             st.download_button(
-                "⬇️ install_local.bat (Windows)",
+                "🪟 Windows",
                 win_bat,
                 file_name="install_local.bat",
                 mime="application/octet-stream",
-                key="dl_win_bat",
+                key="dl_win_bat_main" if compact else "dl_win_bat",
+                use_container_width=True,
             )
 
-        st.markdown("**Or paste in Terminal (Mac/Linux):**")
-        st.code(INSTALL_ONE_LINER_MAC, language="bash")
-        st.caption(f"Installs to `~/AIMovieMakerPro` from {INSTALL_REPO}")
-        st.caption("Mac: if blocked, right-click the file → Open the first time.")
+    st.markdown("**Or paste in Terminal (Mac/Linux):**")
+    st.code(INSTALL_ONE_LINER_MAC, language="bash")
+    st.caption(f"Installs to `~/AIMovieMakerPro` · Requires Python 3, Git, ffmpeg")
+    st.caption("Mac: if blocked, right-click the downloaded file → **Open** the first time.")
 
     with st.expander("📋 What gets installed"):
         st.markdown(
@@ -188,9 +195,8 @@ def main():
 
     if not IS_LOCAL:
         st.warning(
-            "☁️ **Cloud Mode** — Optimized for Streamlit servers. "
-            "Defaults: 360p, Hard Cut, fast encode. Use ≤8 clips for best speed. "
-            "**Install locally** (sidebar) for 1080p and full speed."
+            "☁️ **Cloud Mode** — slower & limited to 360p. "
+            "Open the **💾 Install App** tab for a free local install (1080p, full speed)."
         )
     
     if st.session_state.gen_error:
@@ -205,6 +211,21 @@ def main():
     remaining_mb = MAX_UPLOAD_MB - total_size_mb
 
     with st.sidebar:
+        if not IS_LOCAL:
+            st.markdown("### 💾 Install Locally")
+            mac_cmd = _read_install_file("InstallLocal.command")
+            if mac_cmd:
+                st.download_button(
+                    "⬇️ Download Mac Installer",
+                    mac_cmd,
+                    file_name="InstallLocal.command",
+                    mime="application/x-sh",
+                    key="dl_mac_sidebar",
+                    use_container_width=True,
+                )
+            st.caption("Or open the **Install App** tab →")
+            st.divider()
+
         if IS_LOCAL:
             st.success("💻 **Running Locally** (Full Power)")
             st.markdown("### 📱 Mobile App Link")
@@ -252,12 +273,13 @@ def main():
         video_vol = st.slider("Original Volume", 0.0, 2.0, 1.0)
         bg_vol = st.slider("Music Volume", 0.0, 2.0, 0.5)
         st.divider()
-        render_local_install_section()
-        st.divider()
         if st.button("🗑️ Clear Render Cache"): clear_cache()
         if st.button("🔄 Full Reset"): reset_app()
 
-    tab1, tab2, tab3 = st.tabs(["📁 Files & Order", "📝 Titles & Credits", "🚀 Production"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📁 Files & Order", "📝 Titles & Credits", "🚀 Production", "💾 Install App"])
+
+    with tab4:
+        render_local_install_section(compact=True)
 
     with tab1:
         st.markdown(f"<div class='upload-stats'>Storage Used: {total_size_mb:.1f}MB / {MAX_UPLOAD_MB}MB</div>", unsafe_allow_html=True)
